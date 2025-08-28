@@ -1,0 +1,22 @@
+# Environments
+.env
+.venv
+env/
+venv/
+
+# pycache
+__pycache__/
+*.pyc
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+
+# AI助手配置文件
+CLAUDE.md
+GEMINI.md
