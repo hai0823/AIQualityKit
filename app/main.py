@@ -7,7 +7,7 @@ import asyncio
 
 # Import the logic classes
 from .logic.citation_analyzer_fulltext import Method1BailianAnalyzer as CitationAnalyzer
-from .logic.citation_analyzer_sliced import ConsistencyEvaluatorQwen as SlicedAnalyzer
+from .logic.citation_analyzer_sliced import ConsistencyEvaluator as SlicedAnalyzer
 
 app = FastAPI()
 
@@ -90,14 +90,16 @@ async def analyze_xlsx_file(
     """
     上传xlsx文件进行批量引文分析
     """
-    print("🚨🚨🚨 API函数被调用了！🚨🚨🚨")
-    raise Exception("测试：如果你看到这个错误，说明API确实被调用了！")
+    print("🚨🚨🚨 API函数 analyze_xlsx_file 被调用了！🚨🚨🚨")
     
-    # 获取API Key和分析类型
+    # 获取API配置和分析类型
     api_key = request.headers.get('X-API-Key')
+    api_provider = request.headers.get('X-API-Provider', 'alibaba')
+    api_model = request.headers.get('X-API-Model', '')
+    api_base_url = request.headers.get('X-API-Base-URL', '')
     analysis_type = request.headers.get('X-Analysis-Type', 'fulltext')
     
-    print(f"🔑 API Key: {'已设置' if api_key else '未设置'}, 分析类型: {analysis_type}")
+    print(f"🔑 API配置: 密钥={'已设置' if api_key else '未设置'}, 提供商={api_provider}, 模型={api_model or '默认'}, 分析类型={analysis_type}")
     
     if not api_key:
         return JSONResponse(
@@ -144,9 +146,13 @@ async def analyze_xlsx_file(
         
         # 根据分析类型选择分析器
         if analysis_type == 'sliced':
-            # 使用sliced版本分析器
-            analyzer = SlicedAnalyzer()
-            analyzer.api_key = api_key  # 设置API Key
+            # 使用sliced版本分析器，支持多API提供商
+            analyzer = SlicedAnalyzer(
+                api_key=api_key,
+                provider=api_provider,
+                base_url=api_base_url if api_base_url else None,
+                model=api_model if api_model else None
+            )
             results = await analyzer.analyze_xlsx_file(
                 file_content=file_content,
                 filename=file.filename
@@ -224,7 +230,6 @@ async def analyze_xlsx_file(
                 print(f"✅ 成功读取{len(results)}条结果")
                 
                 # 清理临时文件
-                import os
                 try:
                     os.unlink(temp_json_path)
                     print("🧹 临时文件已清理")
@@ -238,7 +243,6 @@ async def analyze_xlsx_file(
                 raise ValueError(f"Fulltext分析执行失败：{str(e)}")
             finally:
                 # 清理临时Excel文件
-                import os
                 try:
                     os.unlink(temp_excel_path)
                 except:

@@ -1,9 +1,17 @@
 // 全局变量
 let selectedFile = null;
 let apiKey = '';
+let apiProvider = 'alibaba';
+let apiModel = '';
+let apiBaseUrl = '';
 
 // DOM元素
+const apiProviderSelect = document.getElementById('api-provider');
 const apiKeyInput = document.getElementById('api-key');
+const apiKeyLabel = document.getElementById('api-key-label');
+const apiModelInput = document.getElementById('api-model');
+const apiBaseUrlInput = document.getElementById('api-base-url');
+const showAdvancedCheckbox = document.getElementById('show-advanced-api');
 const fileInput = document.getElementById('file-input');
 const fileInfo = document.getElementById('file-info');
 const analyzeXlsxBtn = document.getElementById('analyze-xlsx-btn');
@@ -14,6 +22,26 @@ const textInput = document.getElementById('text-input');
 
 // 初始化事件监听器
 document.addEventListener('DOMContentLoaded', function() {
+    // API提供商选择监听
+    apiProviderSelect.addEventListener('change', function() {
+        apiProvider = this.value;
+        updateApiKeyLabel();
+    });
+
+    // 显示高级选项监听
+    showAdvancedCheckbox.addEventListener('change', function() {
+        toggleAdvancedOptions(this.checked);
+    });
+
+    // API高级选项监听
+    apiModelInput.addEventListener('input', function() {
+        apiModel = this.value.trim();
+    });
+
+    apiBaseUrlInput.addEventListener('input', function() {
+        apiBaseUrl = this.value.trim();
+    });
+
     // API Key输入监听
     apiKeyInput.addEventListener('input', function() {
         apiKey = this.value.trim();
@@ -198,8 +226,17 @@ async function analyzeXlsxFile() {
         // 设置请求头
         const headers = {
             'X-API-Key': apiKey,
+            'X-API-Provider': apiProvider,
             ...analysisOptions
         };
+
+        // 添加API高级选项
+        if (apiModel) {
+            headers['X-API-Model'] = apiModel;
+        }
+        if (apiBaseUrl) {
+            headers['X-API-Base-URL'] = apiBaseUrl;
+        }
 
         const response = await fetch('/api/analyze-xlsx', {
             method: 'POST',
@@ -269,17 +306,22 @@ function showResults(results) {
                 }
                 if (result.analysis) {
                     if (typeof result.analysis === 'string') {
-                        formattedOutput += `分析结果: ${result.analysis.substring(0, 200)}${result.analysis.length > 200 ? '...' : ''}\n`;
+                        // 处理JSON字符串中的换行符
+                        let analysisText = result.analysis;
+                        if (analysisText.includes('\\n')) {
+                            analysisText = analysisText.replace(/\\n/g, '\n');
+                        }
+                        formattedOutput += `分析结果:\n${analysisText}\n`;
                     } else if (Array.isArray(result.analysis) && result.analysis.length > 0) {
                         formattedOutput += `分析结果: 发现${result.analysis.length}个引用分析项\n`;
                         result.analysis.forEach((item, i) => {
-                            if (i < 2) { // 只显示前2项
-                                formattedOutput += `  ${i + 1}. ${item.topic || item.content || JSON.stringify(item).substring(0, 50)}...\n`;
+                            let itemText = item.topic || item.content || JSON.stringify(item);
+                            // 处理换行符
+                            if (itemText.includes('\\n')) {
+                                itemText = itemText.replace(/\\n/g, '\n');
                             }
+                            formattedOutput += `  ${i + 1}. ${itemText}\n`;
                         });
-                        if (result.analysis.length > 2) {
-                            formattedOutput += `  ... 还有${result.analysis.length - 2}项\n`;
-                        }
                     }
                 }
             } else {
@@ -304,7 +346,26 @@ function showResults(results) {
     
     // 添加JSON格式的详细数据（可选展开）
     formattedOutput += `\n=== 详细数据（JSON格式） ===\n`;
-    formattedOutput += JSON.stringify(results, null, 2);
+    
+    // 深度处理JSON中的换行符
+    function processJsonForDisplay(obj) {
+        if (typeof obj === 'string') {
+            return obj.replace(/\\n/g, '\n');
+        } else if (Array.isArray(obj)) {
+            return obj.map(processJsonForDisplay);
+        } else if (obj !== null && typeof obj === 'object') {
+            const processed = {};
+            for (let key in obj) {
+                processed[key] = processJsonForDisplay(obj[key]);
+            }
+            return processed;
+        }
+        return obj;
+    }
+    
+    const processedResults = processJsonForDisplay(results);
+    let jsonString = JSON.stringify(processedResults, null, 2);
+    formattedOutput += jsonString;
     
     resultsOutput.textContent = formattedOutput;
 }
@@ -345,4 +406,38 @@ async function analyzeText() {
         analyzeBtn.disabled = false;
         analyzeBtn.textContent = '分析文本';
     }
+}
+
+// API提供商相关功能
+
+// 更新API Key标签
+function updateApiKeyLabel() {
+    const labels = {
+        'alibaba': '百炼API Key:',
+        'openai': 'OpenAI API Key:',
+        'deepseek': 'DeepSeek API Key:'
+    };
+    
+    const placeholders = {
+        'alibaba': '请输入百炼API Key...',
+        'openai': '请输入OpenAI API Key...',
+        'deepseek': '请输入DeepSeek API Key...'
+    };
+    
+    apiKeyLabel.textContent = labels[apiProvider] || 'API Key:';
+    apiKeyInput.placeholder = placeholders[apiProvider] || '请输入API Key...';
+}
+
+// 切换高级选项显示
+function toggleAdvancedOptions(show) {
+    const advancedOptions = document.querySelectorAll('.api-advanced-options');
+    advancedOptions.forEach(option => {
+        if (show) {
+            option.style.display = 'flex';
+            option.classList.add('visible');
+        } else {
+            option.style.display = 'none';
+            option.classList.remove('visible');
+        }
+    });
 }

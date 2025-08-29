@@ -32,18 +32,33 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-class ConsistencyEvaluatorQwen:
-    def __init__(self, api_key: str = None,
-                 base_url: str = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+class ConsistencyEvaluator:
+    def __init__(self, api_key: str = None, provider: str = "alibaba",
+                 base_url: str = None, model: str = None,
                  rank_start: int = 1, rank_end: int = 50, concurrent_limit: int = 10):
-        # 从环境变量读取API密钥
-        self.api_key = api_key or os.getenv('AL_KEY')
-        if not self.api_key:
-            print("警告：未找到AL_KEY环境变量，无法调用百炼API")
-        self.base_url = base_url
-        self.max_input_length = 128000  # 128k字符限制
+        """
+        初始化一致性评估器，支持多个API提供商
+        
+        Args:
+            api_key: API密钥
+            provider: API提供商 ('alibaba', 'openai', 'deepseek')
+            base_url: API基础URL（可选，默认使用提供商的默认URL）
+            model: 模型名称（可选，默认使用提供商的推荐模型）
+            rank_start: 起始rank值
+            rank_end: 结束rank值
+            concurrent_limit: 并发限制
+        """
+        self.provider = provider.lower()
         self.concurrent_limit = concurrent_limit
-
+        
+        # 配置API提供商
+        self._configure_provider(api_key, base_url, model)
+        
+        if not self.api_key:
+            print(f"警告：未找到API密钥，无法调用{self.provider} API")
+            
+        self.max_input_length = self._get_max_input_length()
+        
         # 创建checkpoints目录（如果不存在）
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.checkpoint_dir = os.path.join(project_root, "data", "output", "checkpoints")
@@ -52,13 +67,47 @@ class ConsistencyEvaluatorQwen:
         # 生成包含时间戳和rank范围的检查点文件名
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         self.checkpoint_file = os.path.join(self.checkpoint_dir,
-                                            f"qwen_evaluation_checkpoint_rank{rank_start}-{rank_end}_{timestamp}.json")
+                                            f"{self.provider}_evaluation_checkpoint_rank{rank_start}-{rank_end}_{timestamp}.json")
 
         # Token统计
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_tokens = 0
         self.api_call_count = 0
+        
+    def _configure_provider(self, api_key: str, base_url: str, model: str):
+        """配置不同的API提供商"""
+        if self.provider == "alibaba":
+            self.api_key = api_key or os.getenv('AL_KEY')
+            self.base_url = base_url or "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+            self.model = model or "qwen-plus"
+            self._api_call_method = self._call_alibaba_api
+            
+        elif self.provider == "openai":
+            self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+            self.base_url = base_url or "https://api.openai.com/v1/chat/completions"
+            self.model = model or "gpt-4o-mini"
+            self._api_call_method = self._call_openai_api
+            
+        elif self.provider == "deepseek":
+            self.api_key = api_key or os.getenv('DEEPSEEK_API_KEY')
+            self.base_url = base_url or "https://api.deepseek.com/v1/chat/completions"
+            self.model = model or "deepseek-chat"
+            self._api_call_method = self._call_openai_api  # DeepSeek使用OpenAI兼容格式
+            
+        else:
+            raise ValueError(f"不支持的API提供商: {self.provider}")
+    
+    def _get_max_input_length(self) -> int:
+        """根据提供商返回最大输入长度"""
+        if self.provider == "alibaba":
+            return 128000  # Qwen Plus 128k上下文
+        elif self.provider == "openai":
+            return 120000  # GPT-4o-mini约128k，留些余量
+        elif self.provider == "deepseek":
+            return 120000  # DeepSeek Chat约128k
+        else:
+            return 100000  # 默认值
 
     def load_citation_data(self, file_path: str, rank_start: int = 1, rank_end: int = 50) -> List[Dict[str, Any]]:
         """
@@ -301,28 +350,15 @@ Rank: {rank}
 
         return prompt
 
-    async def call_qwen_api_async(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
-        """
-        异步调用阿里云百炼API
-
-        Args:
-            session: aiohttp会话
-            prompt: 提示词
-            max_retries: 最大重试次数
-
-        Returns:
-            API响应内容
-        """
-        if not self.api_key:
-            return None
-        
+    async def _call_alibaba_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
+        """异步调用阿里云百炼API"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
 
         data = {
-            "model": "qwen-plus",
+            "model": self.model,
             "input": {
                 "messages": [
                     {
@@ -405,6 +441,103 @@ Rank: {rank}
         logger.error(f"API调用失败，已达到最大重试次数 {max_retries}")
         return None
 
+    async def _call_openai_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
+        """异步调用OpenAI兼容的API（包括OpenAI和DeepSeek）"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 16000
+        }
+
+        for attempt in range(max_retries):
+            try:
+                logger.debug(f"正在调用{self.provider} API (尝试 {attempt + 1}/{max_retries})...")
+
+                # 检查输入长度
+                if len(prompt) > self.max_input_length:
+                    logger.warning(f"提示词长度({len(prompt)})超过限制({self.max_input_length})，进行截断")
+                    prompt = prompt[:self.max_input_length]
+                    data["messages"][0]["content"] = prompt
+
+                timeout = aiohttp.ClientTimeout(total=300)
+                async with session.post(self.base_url, headers=headers, json=data, timeout=timeout) as response:
+                    if response.status == 200:
+                        result = await response.json()
+
+                        # 统计token使用情况（OpenAI格式）
+                        if 'usage' in result:
+                            usage = result['usage']
+                            input_tokens = usage.get('prompt_tokens', 0)  # OpenAI使用prompt_tokens
+                            output_tokens = usage.get('completion_tokens', 0)  # OpenAI使用completion_tokens
+                            total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
+
+                            self.total_input_tokens += input_tokens
+                            self.total_output_tokens += output_tokens
+                            self.total_tokens += total_tokens
+                            self.api_call_count += 1
+
+                            logger.debug(f"Token使用: 输入={input_tokens}, 输出={output_tokens}, 总计={total_tokens}")
+
+                        # 处理OpenAI响应格式
+                        if 'choices' in result and len(result['choices']) > 0:
+                            content = result['choices'][0]['message']['content']
+                            logger.debug(f"API调用成功，响应长度: {len(content)}")
+                            return content
+                        else:
+                            logger.error(f"API响应格式异常: {result}")
+
+                    elif response.status == 429:  # 速率限制
+                        wait_time = 2 ** attempt * 2
+                        logger.warning(f"API速率限制，等待{wait_time}秒后重试")
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    else:
+                        response_text = await response.text()
+                        logger.error(f"API调用失败，状态码: {response.status}, 响应: {response_text}")
+
+            except asyncio.TimeoutError:
+                logger.warning(f"API调用超时，第{attempt + 1}次重试")
+                await asyncio.sleep(2)
+
+            except Exception as e:
+                logger.error(f"API调用异常 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    delay = 2 * (attempt + 1)
+                    logger.info(f"等待 {delay} 秒后重试...")
+                    await asyncio.sleep(delay)
+
+        logger.error(f"API调用失败，已达到最大重试次数 {max_retries}")
+        return None
+
+    async def call_api_async(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
+        """
+        异步调用API的通用方法
+        
+        Args:
+            session: aiohttp会话
+            prompt: 提示词
+            max_retries: 最大重试次数
+            
+        Returns:
+            API响应内容
+        """
+        if not self.api_key:
+            return None
+        
+        return await self._api_call_method(session, prompt, max_retries)
+
     def parse_batch_api_response(self, response: str, batch_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         解析批量API响应，转换为标准格式
@@ -439,8 +572,9 @@ Rank: {rank}
                     continue
 
                 required_keys = ['topic', 'citation_numbers', 'consistency', 'reason']
-                if not all(key in result for key in required_keys):
-                    logger.warning(f"结果格式不完整: {result}")
+                missing_keys = [key for key in required_keys if key not in result]
+                if missing_keys:
+                    logger.debug(f"结果格式不完整，缺少字段 {missing_keys}: {str(result)[:100]}...")
                     continue
 
                 # 标准化consistency值
@@ -450,7 +584,7 @@ Rank: {rank}
                 elif consistency in ['inconsistent', '不一致']:
                     consistency_value = '不一致'
                 else:
-                    logger.warning(f"未知的consistency值: {result['consistency']}")
+                    logger.debug(f"未知的consistency值 '{result['consistency']}'，预期为'一致'或'不一致': {str(result)[:100]}...")
                     continue
 
                 standard_result = {
@@ -723,7 +857,7 @@ Rank: {rank}
 
             for parse_attempt in range(max_parse_retries):
                 # 异步调用API
-                api_response = await self.call_qwen_api_async(session, prompt)
+                api_response = await self.call_api_async(session, prompt)
 
                 if api_response:
                     # 尝试解析响应
@@ -743,10 +877,10 @@ Rank: {rank}
             # 处理最终结果
             if batch_results:
                 if len(batch_results) != len(batch_data['topics']):
-                    logger.warning(
-                        f"rank {rank} 结果数量不匹配: 期望{len(batch_data['topics'])}，实际{len(batch_results)}")
+                    logger.debug(
+                        f"rank {rank} 结果数量不匹配: 期望{len(batch_data['topics'])}，实际{len(batch_results)}，这通常是因为AI响应中部分结果格式不完整被过滤")
 
-                logger.info(f"rank {rank} 评估完成，获得{len(batch_results)}个结果")
+                logger.info(f"rank {rank} 评估完成，获得{len(batch_results)}个有效结果（共{len(batch_data['topics'])}个输入）")
                 return batch_results
             else:
                 # 所有重试都失败，为该rank的每个topic添加失败记录
@@ -961,7 +1095,7 @@ def main():
     print(f"断点续传: {'禁用' if args.no_resume else '启用'}\n")
 
     # 创建评估器
-    evaluator = ConsistencyEvaluatorQwen(api_key=args.api_key, rank_start=args.rank_start, rank_end=args.rank_end, concurrent_limit=args.concurrent_limit)
+    evaluator = ConsistencyEvaluator(api_key=args.api_key, rank_start=args.rank_start, rank_end=args.rank_end, concurrent_limit=args.concurrent_limit)
 
     # 开始评估
     evaluator.evaluate_consistency(
