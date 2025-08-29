@@ -1,19 +1,111 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Quality Kit</title>
+    <title>AI Quality Kit - 引文分析工具</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
         <h1>AI Quality Kit</h1>
-        <p>Enter text below to analyze its quality (citations, consistency, hallucinations).</p>
-        <textarea id="text-input" rows="10" placeholder="Paste the AI-generated text here..."></textarea>
-        <button id="analyze-btn">Analyze</button>
-        <h2>Analysis Results</h2>
-        <pre id="results-output">Results will be shown here...</pre>
+        <p>上传Excel文件进行引文分析，支持fulltext和sliced两种分析模式</p>
+        
+        <!-- API Key输入区域 -->
+        <div class="config-section">
+            <h3>配置</h3>
+            <div class="input-group">
+                <label for="api-key">百炼API Key:</label>
+                <input type="password" id="api-key" placeholder="请输入百炼API Key..." required>
+            </div>
+        </div>
+
+        <!-- 文件上传区域 -->
+        <div class="upload-section">
+            <h3>文件上传</h3>
+            <div class="file-upload">
+                <input type="file" id="file-input" accept=".xlsx" required>
+                <label for="file-input" class="file-label">选择Excel文件 (.xlsx)</label>
+                <div id="file-info" class="file-info"></div>
+            </div>
+        </div>
+
+        <!-- 分析选项 -->
+        <div class="analysis-options">
+            <h3>分析选项</h3>
+            <div class="option-group">
+                <label>
+                    <input type="radio" name="analysis-type" value="fulltext" checked>
+                    Fulltext分析 (完整文本分析)
+                </label>
+                <label>
+                    <input type="radio" name="analysis-type" value="sliced">
+                    Sliced分析 (分段分析)
+                </label>
+            </div>
+            
+            <!-- Fulltext详细选项 -->
+            <div id="fulltext-options" class="fulltext-detailed-options">
+                <h4>Fulltext分析详细选项</h4>
+                <div class="detailed-option-group">
+                    <label>
+                        <input type="radio" name="fulltext-mode" value="all" checked>
+                        分析所有数据
+                    </label>
+                    <label>
+                        <input type="radio" name="fulltext-mode" value="head">
+                        分析前N条数据
+                    </label>
+                    <label>
+                        <input type="radio" name="fulltext-mode" value="specific">
+                        分析指定rank的单条数据
+                    </label>
+                    <label>
+                        <input type="radio" name="fulltext-mode" value="range">
+                        从指定位置开始分析
+                    </label>
+                </div>
+                
+                <!-- 数值输入区域 -->
+                <div class="number-inputs">
+                    <div class="input-row" id="head-input" style="display: none;">
+                        <label>分析数量:</label>
+                        <input type="number" id="num-samples" min="1" placeholder="例如: 10">
+                    </div>
+                    <div class="input-row" id="specific-input" style="display: none;">
+                        <label>Rank编号:</label>
+                        <input type="number" id="specific-rank" min="1" placeholder="例如: 5">
+                    </div>
+                    <div class="input-row" id="range-input" style="display: none;">
+                        <label>起始位置:</label>
+                        <input type="number" id="start-from" min="1" placeholder="例如: 10">
+                        <label>分析数量 (可选):</label>
+                        <input type="number" id="range-count" min="1" placeholder="留空表示到结尾">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="action-buttons">
+            <button id="analyze-xlsx-btn" disabled>开始分析</button>
+        </div>
+
+        <!-- 分析结果 -->
+        <div class="results-section">
+            <h3>分析结果</h3>
+            <div id="progress-info" class="progress-info"></div>
+            <pre id="results-output">选择文件并配置API Key后开始分析...</pre>
+        </div>
+
+        <!-- 原有的文本分析功能 -->
+        <hr>
+        <div class="text-analysis-section">
+            <h3>文本分析 (旧功能)</h3>
+            <p>直接输入文本进行质量分析 (引文、一致性、幻觉检测)</p>
+            <textarea id="text-input" rows="8" placeholder="在此粘贴AI生成的文本..."></textarea>
+            <button id="analyze-btn">分析文本</button>
+        </div>
     </div>
     <script src="/static/script.js"></script>
 </body>

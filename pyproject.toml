@@ -12,6 +12,7 @@ dependencies = [
     "openpyxl",
     "aiohttp",
     "requests",
+    "aiofiles>=24.1.0",
 ]
 
 [build-system]
