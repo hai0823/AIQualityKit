@@ -7,9 +7,11 @@ let apiBaseUrl = '';
 
 // DOM元素
 const apiProviderSelect = document.getElementById('api-provider');
+const modelNameInput = document.getElementById('model-name');
+const modelLabel = document.getElementById('model-label');
+const modelHelp = document.getElementById('model-help');
 const apiKeyInput = document.getElementById('api-key');
 const apiKeyLabel = document.getElementById('api-key-label');
-const apiModelInput = document.getElementById('api-model');
 const apiBaseUrlInput = document.getElementById('api-base-url');
 const showAdvancedCheckbox = document.getElementById('show-advanced-api');
 const fileInput = document.getElementById('file-input');
@@ -26,6 +28,13 @@ document.addEventListener('DOMContentLoaded', function() {
     apiProviderSelect.addEventListener('change', function() {
         apiProvider = this.value;
         updateApiKeyLabel();
+        updateDefaultModel();
+    });
+
+    // 模型名称输入监听
+    modelNameInput.addEventListener('input', function() {
+        apiModel = this.value.trim();
+        updateAnalyzeButton();
     });
 
     // 显示高级选项监听
@@ -34,10 +43,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // API高级选项监听
-    apiModelInput.addEventListener('input', function() {
-        apiModel = this.value.trim();
-    });
-
     apiBaseUrlInput.addEventListener('input', function() {
         apiBaseUrl = this.value.trim();
     });
@@ -64,14 +69,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // 分析类型切换监听
     document.querySelectorAll('input[name="analysis-type"]').forEach(radio => {
         radio.addEventListener('change', function() {
-            toggleFulltextOptions(this.value === 'fulltext');
+            toggleAnalysisOptions(this.value);
         });
     });
 
     // Fulltext详细选项监听
     document.querySelectorAll('input[name="fulltext-mode"]').forEach(radio => {
         radio.addEventListener('change', function() {
-            showRelevantInputs(this.value);
+            showFulltextInputs(this.value);
+        });
+    });
+
+    // Sliced详细选项监听
+    document.querySelectorAll('input[name="sliced-mode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            showSlicedInputs(this.value);
         });
     });
 
@@ -82,8 +94,9 @@ document.addEventListener('DOMContentLoaded', function() {
     analyzeBtn.addEventListener('click', analyzeText);
 
     // 初始化界面状态
-    toggleFulltextOptions(true);
-    showRelevantInputs('all');
+    updateDefaultModel();
+    toggleAnalysisOptions('fulltext');
+    showFulltextInputs('all');
 });
 
 // 更新分析按钮状态
@@ -121,29 +134,60 @@ function hideProgress() {
     progressInfo.style.display = 'none';
 }
 
-// 切换Fulltext选项显示
-function toggleFulltextOptions(show) {
+// 切换分析选项显示
+function toggleAnalysisOptions(analysisType) {
     const fulltextOptions = document.getElementById('fulltext-options');
-    fulltextOptions.style.display = show ? 'block' : 'none';
+    const slicedOptions = document.getElementById('sliced-options');
+    
+    if (analysisType === 'fulltext') {
+        fulltextOptions.style.display = 'block';
+        slicedOptions.style.display = 'none';
+    } else if (analysisType === 'sliced') {
+        fulltextOptions.style.display = 'none';
+        slicedOptions.style.display = 'block';
+        // 初始化sliced输入框显示
+        showSlicedInputs('all');
+    }
 }
 
-// 显示相关输入框
-function showRelevantInputs(mode) {
-    // 隐藏所有输入框
-    document.getElementById('head-input').style.display = 'none';
-    document.getElementById('specific-input').style.display = 'none';
-    document.getElementById('range-input').style.display = 'none';
+// 显示Fulltext相关输入框
+function showFulltextInputs(mode) {
+    // 隐藏所有fulltext输入框
+    document.getElementById('fulltext-head-input').style.display = 'none';
+    document.getElementById('fulltext-specific-input').style.display = 'none';
+    document.getElementById('fulltext-range-input').style.display = 'none';
     
     // 显示相关输入框
     switch (mode) {
         case 'head':
-            document.getElementById('head-input').style.display = 'flex';
+            document.getElementById('fulltext-head-input').style.display = 'flex';
             break;
         case 'specific':
-            document.getElementById('specific-input').style.display = 'flex';
+            document.getElementById('fulltext-specific-input').style.display = 'flex';
             break;
         case 'range':
-            document.getElementById('range-input').style.display = 'flex';
+            document.getElementById('fulltext-range-input').style.display = 'flex';
+            break;
+    }
+}
+
+// 显示Sliced相关输入框
+function showSlicedInputs(mode) {
+    // 隐藏所有sliced输入框
+    document.getElementById('sliced-head-input').style.display = 'none';
+    document.getElementById('sliced-specific-input').style.display = 'none';
+    document.getElementById('sliced-range-input').style.display = 'none';
+    
+    // 显示相关输入框
+    switch (mode) {
+        case 'head':
+            document.getElementById('sliced-head-input').style.display = 'flex';
+            break;
+        case 'specific':
+            document.getElementById('sliced-specific-input').style.display = 'flex';
+            break;
+        case 'range':
+            document.getElementById('sliced-range-input').style.display = 'flex';
             break;
     }
 }
@@ -161,20 +205,53 @@ function getAnalysisOptions() {
 
         switch (fulltextMode) {
             case 'head':
-                const numSamples = document.getElementById('num-samples').value;
+                const numSamples = document.getElementById('fulltext-num-samples').value;
                 if (numSamples) {
                     options['X-Num-Samples'] = numSamples;
                 }
                 break;
             case 'specific':
-                const specificRank = document.getElementById('specific-rank').value;
+                const specificRank = document.getElementById('fulltext-specific-rank').value;
                 if (specificRank) {
                     options['X-Specific-Rank'] = specificRank;
                 }
                 break;
             case 'range':
-                const startFrom = document.getElementById('start-from').value;
-                const rangeCount = document.getElementById('range-count').value;
+                const startFrom = document.getElementById('fulltext-start-from').value;
+                const rangeCount = document.getElementById('fulltext-range-count').value;
+                if (startFrom) {
+                    options['X-Start-From'] = startFrom;
+                    if (rangeCount) {
+                        options['X-Num-Samples'] = rangeCount;
+                    }
+                }
+                break;
+        }
+    } else if (analysisType === 'sliced') {
+        // 获取执行模式
+        const executionMode = document.querySelector('input[name="sliced-execution"]:checked').value;
+        options['X-Execution-Mode'] = executionMode;
+        
+        // 获取分析范围
+        const slicedMode = document.querySelector('input[name="sliced-mode"]:checked').value;
+        options['X-Analysis-Mode'] = slicedMode;
+
+        switch (slicedMode) {
+            case 'head':
+                const numSamples = document.getElementById('sliced-num-samples').value;
+                if (numSamples) {
+                    options['X-Num-Samples'] = numSamples;
+                }
+                break;
+            case 'specific':
+                const specificRank = document.getElementById('sliced-specific-rank').value;
+                if (specificRank) {
+                    options['X-Specific-Rank'] = specificRank;
+                }
+                break;
+            case 'range':
+                const startFrom = document.getElementById('sliced-start-from').value;
+                const rangeCount = document.getElementById('sliced-range-count').value;
                 if (startFrom) {
                     options['X-Start-From'] = startFrom;
                     if (rangeCount) {
@@ -206,6 +283,7 @@ async function analyzeXlsxFile() {
     analyzeXlsxBtn.textContent = '正在分析...';
     
     let progressMsg = `正在使用${analysisType}模式分析文件: ${selectedFile.name}`;
+    
     if (analysisType === 'fulltext') {
         const mode = analysisOptions['X-Analysis-Mode'];
         if (mode === 'head' && analysisOptions['X-Num-Samples']) {
@@ -216,6 +294,23 @@ async function analyzeXlsxFile() {
             const startFrom = analysisOptions['X-Start-From'];
             const count = analysisOptions['X-Num-Samples'] || '到结尾';
             progressMsg += ` (从第${startFrom}条开始，${count}条)`;
+        }
+    } else if (analysisType === 'sliced') {
+        const executionMode = analysisOptions['X-Execution-Mode'];
+        const mode = analysisOptions['X-Analysis-Mode'];
+        
+        progressMsg += ` - ${executionMode}模式`;
+        
+        if (mode === 'head' && analysisOptions['X-Num-Samples']) {
+            progressMsg += ` (前${analysisOptions['X-Num-Samples']}条)`;
+        } else if (mode === 'specific' && analysisOptions['X-Specific-Rank']) {
+            progressMsg += ` (第${analysisOptions['X-Specific-Rank']}条)`;
+        } else if (mode === 'range' && analysisOptions['X-Start-From']) {
+            const startFrom = analysisOptions['X-Start-From'];
+            const count = analysisOptions['X-Num-Samples'] || '到结尾';
+            progressMsg += ` (从第${startFrom}条开始，${count}条)`;
+        } else {
+            progressMsg += ` (所有数据)`;
         }
     }
     
@@ -415,17 +510,52 @@ function updateApiKeyLabel() {
     const labels = {
         'alibaba': '百炼API Key:',
         'openai': 'OpenAI API Key:',
-        'deepseek': 'DeepSeek API Key:'
+        'deepseek': 'DeepSeek API Key:',
+        'nuwaapi': 'NuwaAPI Key:'
     };
     
     const placeholders = {
         'alibaba': '请输入百炼API Key...',
         'openai': '请输入OpenAI API Key...',
-        'deepseek': '请输入DeepSeek API Key...'
+        'deepseek': '请输入DeepSeek API Key...',
+        'nuwaapi': '请输入NuwaAPI Key...'
     };
     
     apiKeyLabel.textContent = labels[apiProvider] || 'API Key:';
     apiKeyInput.placeholder = placeholders[apiProvider] || '请输入API Key...';
+}
+
+// 更新默认模型
+function updateDefaultModel() {
+    // 定义各提供商的默认模型
+    const defaultModels = {
+        'alibaba': 'qwen-plus',
+        'openai': 'gpt-4o',
+        'deepseek': 'deepseek-chat',
+        'nuwaapi': 'gpt-4o'
+    };
+    
+    // 定义各提供商的模型描述
+    const modelDescriptions = {
+        'alibaba': '推荐使用 qwen-plus, qwen-turbo, qwen-max, qwen-long 等',
+        'openai': '推荐使用 gpt-4o, gpt-4o-mini, gpt-3.5-turbo 等',
+        'deepseek': '推荐使用 deepseek-chat',
+        'nuwaapi': '推荐使用 gpt-4o, gpt-4o-mini, claude-3-5-sonnet, deepseek-reasoner 等'
+    };
+
+    // 获取当前提供商的默认模型
+    const defaultModel = defaultModels[apiProvider] || '';
+    const description = modelDescriptions[apiProvider] || '请输入模型名称';
+    
+    // 设置默认模型值
+    if (!apiModel) {
+        apiModel = defaultModel;
+        modelNameInput.value = defaultModel;
+    }
+    
+    // 更新占位符和帮助文本
+    modelNameInput.placeholder = defaultModel || '请输入模型名称...';
+    modelHelp.textContent = description;
 }
 
 // 切换高级选项显示

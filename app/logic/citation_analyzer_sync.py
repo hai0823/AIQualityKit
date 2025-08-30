@@ -18,8 +18,7 @@
 
 import json
 import pandas as pd
-import aiohttp
-import asyncio
+import requests
 import time
 import os
 from typing import List, Dict, Any, Optional, Tuple
@@ -35,52 +34,25 @@ logger = logging.getLogger(__name__)
 
 class ConsistencyEvaluator:
     def __init__(self, api_key: str = None, provider: str = "alibaba",
-                 base_url: str = None, model: str = None,
-                 rank_start: int = 1, rank_end: int = 50, concurrent_limit: int = 10):
+                 base_url: str = None, model: str = None, rank_start: int = 1, rank_end: int = 50):
         """
         初始化一致性评估器，支持多个API提供商
         
         Args:
             api_key: API密钥
             provider: API提供商 ('alibaba', 'openai', 'deepseek', 'nuwaapi')
-            base_url: API基础URL（可选，默认使用提供商的默认URL）
-            model: 模型名称（可选，默认使用提供商的推荐模型）
+            base_url: API基础URL（可选）
+            model: 模型名称（可选）
             rank_start: 起始rank值
             rank_end: 结束rank值
-            concurrent_limit: 并发限制
         """
         self.provider = provider.lower()
-        self.concurrent_limit = concurrent_limit
         
-        # 配置API提供商
-        self._configure_provider(api_key, base_url, model)
-        
-        if not self.api_key:
-            print(f"警告：未找到API密钥，无法调用{self.provider} API")
-            
-        self.max_input_length = self._get_max_input_length()
-        
-        # 创建checkpoints目录（如果不存在）
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.checkpoint_dir = os.path.join(project_root, "data", "output", "checkpoints")
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
-
-        # 生成包含时间戳和rank范围的检查点文件名
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self.checkpoint_file = os.path.join(self.checkpoint_dir,
-                                            f"{self.provider}_evaluation_checkpoint_rank{rank_start}-{rank_end}_{timestamp}.json")
-
-        # Token统计
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_tokens = 0
-        self.api_call_count = 0
-        
-    def _configure_provider(self, api_key: str, base_url: str, model: str):
-        """配置不同的API提供商"""
         # 修正NUWA_KEY环境变量名
         if self.provider == "nuwaapi":
             api_key = api_key or os.getenv('NUWA_KEY')
+        elif self.provider == "alibaba":
+            api_key = api_key or os.getenv('AL_KEY') or os.getenv('DASHSCOPE_API_KEY')
         
         # 使用通用API客户端
         self.api_client = create_api_client(self.provider, api_key, base_url, model)
@@ -89,19 +61,29 @@ class ConsistencyEvaluator:
         self.api_key = self.api_client.api_key
         self.base_url = self.api_client.base_url
         self.model = self.api_client.model
-    
-    def _get_max_input_length(self) -> int:
-        """根据提供商返回最大输入长度"""
-        if self.provider == "alibaba":
-            return 128000  # Qwen Plus 128k上下文
-        elif self.provider == "openai":
-            return 120000  # GPT-4o-mini约128k，留些余量
-        elif self.provider == "deepseek":
-            return 120000  # DeepSeek Chat约128k
-        elif self.provider == "nuwaapi":
-            return 120000  # NuwaAPI支持的模型一般都是128k，留些余量
-        else:
-            return 100000  # 默认值
+        self.max_input_length = 128000  # 128k字符限制
+        
+        if not self.api_key:
+            raise ValueError(f"API密钥未设置。请设置对应的环境变量或通过参数传入。")
+        
+        print(f"正在使用提供商: {self.provider}")
+        print(f"正在使用模型: {self.model}")
+
+        # 创建checkpoints目录（如果不存在）
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.checkpoint_dir = os.path.join(project_root, "data", "output", "checkpoints")
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+        # 生成包含时间戳和rank范围的检查点文件名
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        self.checkpoint_file = os.path.join(self.checkpoint_dir,
+                                            f"qwen_evaluation_checkpoint_rank{rank_start}-{rank_end}_{timestamp}.json")
+
+        # Token统计
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_tokens = 0
+        self.api_call_count = 0
 
     def load_citation_data(self, file_path: str, rank_start: int = 1, rank_end: int = 50) -> List[Dict[str, Any]]:
         """
@@ -261,23 +243,23 @@ class ConsistencyEvaluator:
 - 评估时需要时刻谨记评估标准，防止错评
 
 评估标准：
-1. 事实一致性
+1. 事实一致性​
 * 关键数据（年份、数值、统计结果）是否完全匹配引文。
 * 专业术语定义是否与引文原文一致（如"造血干细胞移植"≠"干细胞疗法"）。
 * 案例/事件描述是否无虚构或篡改（如引文未提"淋巴瘤治疗",AI不得添加）。
-2. 内容完整性
+2. 内容完整性​
 * AI是否遗漏引文的关键限制条件（如"需配合化疗"被省略）。
 * 是否擅自扩展引文范围（如引文仅支持"白血病",AI添加"再生障碍性贫血"）。
 * 引文结论的适用边界是否被突破（如"部分有效"被改为"普遍有效"）。
-3. 语义匹配度
+3. 语义匹配度​
 * 核心论点逻辑链是否与引文一致（如"生成疾病细胞→研究机制"是否完整保留）。
 * 引文中的因果关系是否被曲解（如"收入提升因数字技术"≠"因政策扶持"）。
 * 引文中的否定表述是否被错误转换为肯定（如"未证明有效"≠"证明有效"）。
-4. 引用规范性
+4. 引用规范性​
 * 引用的文献/期刊是否存在且未被虚构（如DOI验证失败或期刊已停刊）。
 * 引用位置是否准确（如引文描述"细胞疗法"，AI误标为"基因治疗"）。
 * 引用格式是否完整（缺失作者、出版年份、页码等关键信息）。
-5. 逻辑连贯性
+5. 逻辑连贯性​
 * 多个引文合并时是否产生矛盾（如citation:1与citation:6结论冲突）。
 * 图表数据与正文分析是否一致（如正文称"全国数据"，图表仅含局部样本）。
 * 是否出现反常识推论（如"量子计算可治愈癌症"无依据）。
@@ -290,6 +272,7 @@ class ConsistencyEvaluator:
     "citation_topic": "对应引文文本内容,需要具体到句子或者段落",
     "consistency": "一致或者不一致",
     "reason": "一致或者不一致的具体原因说明，需要具体指出关键的一致或不一致之处",
+    "qualitative_analysis": "从评估标准角度的定性分析，格式为'评估标准+正确/错误'，如'事实一致性正确'、'逻辑连贯性错误'等",
     "rank": "{rank}",
     "citation_numbers": [引文编号列表]
   }},
@@ -303,6 +286,7 @@ class ConsistencyEvaluator:
     "citation_topic": "提供相关成就的证明记录，如奖项、作品、国际影响力等，彰显专业实力与行业认可；",
     "consistency": "一致",
     "reason": "标注句子中的'成就证明'及具体示例（国际奖项、高影响力作品、参展记录、媒体报道）与引文1中'提供相关成就的证明记录，如奖项、作品、国际影响力等'完全匹配，且引文4也提及'获奖经历、媒体报道等相关证明'，语义和内容均一致。无虚构、篡改或遗漏关键信息。",
+    "qualitative_analysis": "内容一致性正确",
     "rank": "34",
     "citation_numbers": [
       1,
@@ -314,6 +298,7 @@ class ConsistencyEvaluator:
     "citation_topic": "引文2: 干细胞能补充新生细胞，替代老化、受损细胞，改善组织代谢与营养供给。注入皮肤的干细胞，增加胶原蛋白合成，减少皱纹，让肌肤恢复弹性、光泽。 | 引文5: 干细胞可以起到调节代谢的功能，立体运用干细胞的多项分化能力，从而提高代谢的效率从而使机体的代谢废物排出体外，促进机体内的营养吸收，维持机体的正常生理功能；",
     "consistency": "不一致",
     "reason": "关键内容不匹配：1) 标注句子中'改善骨密度'在引文2和引文5中均未提及，属于擅自扩展引文范围；2) 引文2明确说明干细胞'改善组织代谢与营养供给'，而标注句子简化为'改善代谢功能'，虽语义相近但不够完整；3) 引文5提到调节代谢功能是'提高代谢效率，促进废物排出和营养吸收'，标注句子的'改善代谢功能'表述过于笼统，未完整反映引文细节",
+    "qualitative_analysis": "事实准确性错误",
     "rank": "1",
     "citation_numbers": [
       2,
@@ -344,195 +329,28 @@ Rank: {rank}
 
         return prompt
 
-    async def _call_alibaba_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
-        """异步调用阿里云百炼API"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": self.model,
-            "input": {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-            },
-            "parameters": {
-                "temperature": 0.1,
-                "max_tokens": 16000,
-                "top_p": 0.8,
-                "enable_thinking": False
-            },
-        }
-
-        for attempt in range(max_retries):
-            try:
-                logger.debug(f"正在调用API (尝试 {attempt + 1}/{max_retries})...")
-
-                # 检查输入长度
-                if len(prompt) > self.max_input_length:
-                    logger.warning(f"提示词长度({len(prompt)})超过限制({self.max_input_length})，进行截断")
-                    prompt = prompt[:self.max_input_length]
-                    data["input"]["messages"][0]["content"] = prompt
-
-                timeout = aiohttp.ClientTimeout(total=300)
-                async with session.post(self.base_url, headers=headers, json=data, timeout=timeout) as response:
-                    if response.status == 200:
-                        result = await response.json()
-
-                        # 统计token使用情况
-                        if 'usage' in result:
-                            usage = result['usage']
-                            input_tokens = usage.get('input_tokens', 0)
-                            output_tokens = usage.get('output_tokens', 0)
-                            total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
-
-                            self.total_input_tokens += input_tokens
-                            self.total_output_tokens += output_tokens
-                            self.total_tokens += total_tokens
-                            self.api_call_count += 1
-
-                            logger.debug(f"Token使用: 输入={input_tokens}, 输出={output_tokens}, 总计={total_tokens}")
-
-                        # 处理新的API响应格式
-                        if 'output' in result:
-                            if 'text' in result['output']:
-                                content = result['output']['text']
-                                logger.debug(f"API调用成功，响应长度: {len(content)}")
-                                return content
-                            elif 'choices' in result['output'] and len(result['output']['choices']) > 0:
-                                content = result['output']['choices'][0]['message']['content']
-                                logger.debug(f"API调用成功，响应长度: {len(content)}")
-                                return content
-                        else:
-                            logger.error(f"API响应格式异常: {result}")
-
-                    elif response.status == 429:  # 速率限制
-                        wait_time = 2 ** attempt * 2
-                        logger.warning(f"API速率限制，等待{wait_time}秒后重试")
-                        await asyncio.sleep(wait_time)
-                        continue
-
-                    else:
-                        response_text = await response.text()
-                        logger.error(f"API调用失败，状态码: {response.status}, 响应: {response_text}")
-
-            except asyncio.TimeoutError:
-                logger.warning(f"API调用超时，第{attempt + 1}次重试")
-                await asyncio.sleep(2)
-
-            except Exception as e:
-                logger.error(f"API调用异常 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-                if attempt < max_retries - 1:
-                    delay = 2 * (attempt + 1)
-                    logger.info(f"等待 {delay} 秒后重试...")
-                    await asyncio.sleep(delay)
-
-        logger.error(f"API调用失败，已达到最大重试次数 {max_retries}")
-        return None
-
-    async def _call_openai_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
-        """异步调用OpenAI兼容的API（包括OpenAI和DeepSeek）"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.1,
-            "max_tokens": 16000
-        }
-
-        for attempt in range(max_retries):
-            try:
-                logger.debug(f"正在调用{self.provider} API (尝试 {attempt + 1}/{max_retries})...")
-
-                # 检查输入长度
-                if len(prompt) > self.max_input_length:
-                    logger.warning(f"提示词长度({len(prompt)})超过限制({self.max_input_length})，进行截断")
-                    prompt = prompt[:self.max_input_length]
-                    data["messages"][0]["content"] = prompt
-
-                timeout = aiohttp.ClientTimeout(total=300)
-                async with session.post(self.base_url, headers=headers, json=data, timeout=timeout) as response:
-                    if response.status == 200:
-                        result = await response.json()
-
-                        # 统计token使用情况（OpenAI格式）
-                        if 'usage' in result:
-                            usage = result['usage']
-                            input_tokens = usage.get('prompt_tokens', 0)  # OpenAI使用prompt_tokens
-                            output_tokens = usage.get('completion_tokens', 0)  # OpenAI使用completion_tokens
-                            total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
-
-                            self.total_input_tokens += input_tokens
-                            self.total_output_tokens += output_tokens
-                            self.total_tokens += total_tokens
-                            self.api_call_count += 1
-
-                            logger.debug(f"Token使用: 输入={input_tokens}, 输出={output_tokens}, 总计={total_tokens}")
-
-                        # 处理OpenAI响应格式
-                        if 'choices' in result and len(result['choices']) > 0:
-                            content = result['choices'][0]['message']['content']
-                            logger.debug(f"API调用成功，响应长度: {len(content)}")
-                            return content
-                        else:
-                            logger.error(f"API响应格式异常: {result}")
-
-                    elif response.status == 429:  # 速率限制
-                        wait_time = 2 ** attempt * 2
-                        logger.warning(f"API速率限制，等待{wait_time}秒后重试")
-                        await asyncio.sleep(wait_time)
-                        continue
-
-                    else:
-                        response_text = await response.text()
-                        logger.error(f"API调用失败，状态码: {response.status}, 响应: {response_text}")
-
-            except asyncio.TimeoutError:
-                logger.warning(f"API调用超时，第{attempt + 1}次重试")
-                await asyncio.sleep(2)
-
-            except Exception as e:
-                logger.error(f"API调用异常 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-                if attempt < max_retries - 1:
-                    delay = 2 * (attempt + 1)
-                    logger.info(f"等待 {delay} 秒后重试...")
-                    await asyncio.sleep(delay)
-
-        logger.error(f"API调用失败，已达到最大重试次数 {max_retries}")
-        return None
-
-    async def call_api_async(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
+    def call_api(self, prompt: str, max_retries: int = 3) -> Optional[str]:
         """
-        异步调用API的通用方法
-        
+        调用API（支持多提供商）
+
         Args:
-            session: aiohttp会话
             prompt: 提示词
             max_retries: 最大重试次数
-            
+
         Returns:
             API响应内容
         """
-        if not self.api_key:
-            return None
+        # 检查输入长度
+        if len(prompt) > self.max_input_length:
+            logger.warning(f"提示词长度({len(prompt)})超过限制({self.max_input_length})，进行截断")
+            prompt = prompt[:self.max_input_length]
+
+        # 使用通用API客户端
+        result = self.api_client.call_sync(prompt, temperature=0.1, max_tokens=16000, max_retries=max_retries)
         
-        # 使用新的统一API客户端
-        result = await self.api_client.call_async(session, prompt, max_retries=max_retries)
         if result['success']:
+            logger.debug(f"API调用成功，响应长度: {len(result['content'])}")
+            self.api_call_count += 1
             return result['content']
         else:
             logger.error(f"API调用失败: {result['error']}")
@@ -572,9 +390,8 @@ Rank: {rank}
                     continue
 
                 required_keys = ['topic', 'citation_numbers', 'consistency', 'reason']
-                missing_keys = [key for key in required_keys if key not in result]
-                if missing_keys:
-                    logger.debug(f"结果格式不完整，缺少字段 {missing_keys}: {str(result)[:100]}...")
+                if not all(key in result for key in required_keys):
+                    logger.warning(f"结果格式不完整: {result}")
                     continue
 
                 # 标准化consistency值
@@ -585,7 +402,7 @@ Rank: {rank}
                 elif consistency in ['inconsistent', '不一致']:
                     consistency_value = '不一致'
                 else:
-                    logger.debug(f"未知的consistency值 '{consistency_raw}'，预期为'一致'或'不一致': {str(result)[:100]}...")
+                    logger.warning(f"未知的consistency值: {consistency_raw}")
                     continue
 
                 standard_result = {
@@ -801,19 +618,19 @@ Rank: {rank}
                     inconsistent_results.append(result)
 
             # 保存所有结果
-            all_results_file = os.path.join(output_dir, "qwen_all_results.json")
+            all_results_file = os.path.join(output_dir, "qwen_all_results_sync.json")
             with open(all_results_file, 'w', encoding='utf-8') as f:
                 json.dump(all_results, f, ensure_ascii=False, indent=2)
             logger.info(f"所有结果已保存到: {all_results_file}")
 
             # 保存一致结果
-            consistent_file = os.path.join(output_dir, "qwen_consistency_results.json")
+            consistent_file = os.path.join(output_dir, "qwen_consistency_results_sync.json")
             with open(consistent_file, 'w', encoding='utf-8') as f:
                 json.dump(consistent_results, f, ensure_ascii=False, indent=2)
             logger.info(f"一致结果已保存到: {consistent_file}")
 
             # 保存不一致结果
-            inconsistent_file = os.path.join(output_dir, "qwen_inconsistency_results.json")
+            inconsistent_file = os.path.join(output_dir, "qwen_inconsistency_results_sync.json")
             with open(inconsistent_file, 'w', encoding='utf-8') as f:
                 json.dump(inconsistent_results, f, ensure_ascii=False, indent=2)
             logger.info(f"不一致结果已保存到: {inconsistent_file}")
@@ -827,12 +644,12 @@ Rank: {rank}
         except Exception as e:
             logger.error(f"保存结果失败: {e}")
 
-    async def evaluate_batch_async(self, session: aiohttp.ClientSession, rank_group: List[Dict[str, Any]], excel_df: pd.DataFrame, rank: int) -> List[Dict[str, Any]]:
+    def evaluate_batch(self, rank_group: List[Dict[str, Any]], excel_df: pd.DataFrame, rank: int) -> List[
+        Dict[str, Any]]:
         """
-        异步对同一rank的数据进行批量评估
+        对同一rank的数据进行批量评估
 
         Args:
-            session: aiohttp会话
             rank_group: 同一rank的数据列表
             excel_df: Excel数据
             rank: rank值
@@ -859,8 +676,8 @@ Rank: {rank}
             max_parse_retries = 3
 
             for parse_attempt in range(max_parse_retries):
-                # 异步调用API
-                api_response = await self.call_api_async(session, prompt)
+                # 调用API
+                api_response = self.call_api(prompt)
 
                 if api_response:
                     # 尝试解析响应
@@ -872,7 +689,7 @@ Rank: {rank}
                     else:
                         logger.warning(f"rank {rank} 响应解析失败，重试第{parse_attempt + 1}次")
                         if parse_attempt < max_parse_retries - 1:
-                            await asyncio.sleep(3)  # 等待后重试
+                            time.sleep(3)  # 等待后重试
                 else:
                     logger.error(f"rank {rank} API调用失败")
                     break
@@ -880,10 +697,10 @@ Rank: {rank}
             # 处理最终结果
             if batch_results:
                 if len(batch_results) != len(batch_data['topics']):
-                    logger.debug(
-                        f"rank {rank} 结果数量不匹配: 期望{len(batch_data['topics'])}，实际{len(batch_results)}，这通常是因为AI响应中部分结果格式不完整被过滤")
+                    logger.warning(
+                        f"rank {rank} 结果数量不匹配: 期望{len(batch_data['topics'])}，实际{len(batch_results)}")
 
-                logger.info(f"rank {rank} 评估完成，获得{len(batch_results)}个有效结果（共{len(batch_data['topics'])}个输入）")
+                logger.info(f"rank {rank} 评估完成，获得{len(batch_results)}个结果")
                 return batch_results
             else:
                 # 所有重试都失败，为该rank的每个topic添加失败记录
@@ -906,10 +723,10 @@ Rank: {rank}
             logger.error(f"rank {rank} 批量评估异常: {e}")
             return []
 
-    async def evaluate_consistency_async(self, citation_file: str, excel_file: str, rank_start: int = 1, rank_end: int = 50,
-                                         resume: bool = True):
+    def evaluate_consistency(self, citation_file: str, excel_file: str, rank_start: int = 1, rank_end: int = 50,
+                             resume: bool = True):
         """
-        异步主评估流程，支持并发处理
+        主评估流程
 
         Args:
             citation_file: citation_results.json文件路径
@@ -918,7 +735,7 @@ Rank: {rank}
             rank_end: 结束rank值
             resume: 是否从检查点恢复
         """
-        logger.info(f"开始一致性评估流程，rank范围: {rank_start}-{rank_end}，并发限制: {self.concurrent_limit}")
+        logger.info(f"开始一致性评估流程，rank范围: {rank_start}-{rank_end}")
 
         # 1. 加载数据
         citation_data = self.load_citation_data(citation_file, rank_start, rank_end)
@@ -940,134 +757,45 @@ Rank: {rank}
         if resume:
             processed_ranks, all_results = self.load_checkpoint()
 
-        # 4. 筛选未处理的rank
-        remaining_ranks = [rank for rank in sorted(grouped_data.keys()) if rank not in processed_ranks]
-        logger.info(f"需要处理的rank数量: {len(remaining_ranks)}")
+        # 4. 逐rank批量评估
+        total_ranks = len(grouped_data)
+        processed_count = 0
 
-        if not remaining_ranks:
-            logger.info("所有rank都已处理完成")
-            self.save_results(all_results)
-            return
+        for rank in sorted(grouped_data.keys()):
+            if rank in processed_ranks:
+                logger.info(f"跳过已处理的rank {rank}")
+                continue
 
-        # 5. 异步并发处理
-        semaphore = asyncio.Semaphore(self.concurrent_limit)
-        connector = aiohttp.TCPConnector(limit=100)
+            processed_count += 1
+            logger.info(f"正在评估rank {rank} ({processed_count}/{total_ranks})")
 
-        async def process_with_semaphore(session, rank):
-            async with semaphore:
-                result = await self.evaluate_batch_async(session, grouped_data[rank], excel_df, rank)
-                return rank, result
+            # 使用批量评估方法
+            batch_results = self.evaluate_batch(grouped_data[rank], excel_df, rank)
 
-        async with aiohttp.ClientSession(connector=connector) as session:
-            tasks = []
-            for rank in remaining_ranks:
-                task = process_with_semaphore(session, rank)
-                tasks.append(task)
+            # 添加结果
+            if batch_results:
+                all_results.extend(batch_results)
+                processed_ranks.append(rank)
+                logger.info(f"rank {rank} 处理完成，获得{len(batch_results)}条结果")
+            else:
+                processed_ranks.append(rank)
+                logger.warning(f"rank {rank} 处理完成，但未获得有效结果")
 
-            # 批量处理任务，支持中途保存检查点
-            completed_tasks = []
-            batch_size = min(50, len(tasks))  # 每批最多处理50个
-            
-            for i in range(0, len(tasks), batch_size):
-                batch_tasks = tasks[i:i + batch_size]
-                logger.info(f"正在处理第 {i//batch_size + 1} 批次，包含 {len(batch_tasks)} 个rank")
-                
-                for completed_task in asyncio.as_completed(batch_tasks):
-                    rank, batch_results = await completed_task
-                    
-                    if batch_results:
-                        all_results.extend(batch_results)
-                        processed_ranks.append(rank)
-                        logger.info(f"rank {rank} 处理完成，获得{len(batch_results)}条结果")
-                    else:
-                        processed_ranks.append(rank)
-                        logger.warning(f"rank {rank} 处理完成，但未获得有效结果")
-                    
-                    completed_tasks.append((rank, batch_results))
-                
-                # 每批次完成后保存检查点
-                self.save_checkpoint(processed_ranks, all_results)
-                logger.info(f"第 {i//batch_size + 1} 批次处理完成，已保存检查点")
+            # 保存检查点
+            self.save_checkpoint(processed_ranks, all_results)
 
-        # 6. 保存最终结果
+            # 添加延迟避免API限制
+            time.sleep(2)
+
+        # 5. 保存最终结果
         self.save_results(all_results)
 
-        # 7. 清理检查点文件
+        # 6. 清理检查点文件
         if os.path.exists(self.checkpoint_file):
             os.remove(self.checkpoint_file)
             logger.info("检查点文件已清理")
 
         logger.info(f"评估完成，总共处理了{len(all_results)}条数据")
-
-    async def analyze_xlsx_file(self, file_content: bytes, filename: str) -> List[Dict[str, Any]]:
-        """处理上传的Excel文件并进行分析"""
-        import tempfile
-        import io
-        
-        try:
-            # 将文件内容写入临时文件
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
-                temp_file.write(file_content)
-                temp_path = temp_file.name
-            
-            # 直接使用Excel文件进行分析（简化版本）
-            df = pd.read_excel(temp_path)
-            
-            # 创建模拟的引文分析结果
-            results = []
-            for index, row in df.iterrows():
-                result = {
-                    'rank': index + 1,
-                    'filename': filename,
-                    'question': row.get('模型prompt', ''),
-                    'answer': row.get('答案', ''),
-                    'api_success': True,
-                    'analysis': 'Sliced分析模式：文件已成功处理',
-                    'analysis_type': 'sliced'
-                }
-                results.append(result)
-            
-            # 清理临时文件
-            import os
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-                
-            return results
-            
-        except Exception as e:
-            # 如果临时文件方法失败，尝试直接从内存读取
-            try:
-                df = pd.read_excel(io.BytesIO(file_content))
-                results = []
-                for index, row in df.iterrows():
-                    result = {
-                        'rank': index + 1,
-                        'filename': filename,
-                        'row_data': row.to_dict(),
-                        'api_success': False,
-                        'error': f'Sliced分析处理成功但跳过API调用（演示模式）: {str(e)}',
-                        'analysis_type': 'sliced'
-                    }
-                    results.append(result)
-                return results
-            except Exception as inner_e:
-                raise ValueError(f"Sliced分析无法处理Excel文件：{str(inner_e)}")
-
-    def evaluate_consistency(self, citation_file: str, excel_file: str, rank_start: int = 1, rank_end: int = 50,
-                             resume: bool = True):
-        """
-        主评估流程的同步包装器
-
-        Args:
-            citation_file: citation_results.json文件路径
-            excel_file: Excel文件路径
-            rank_start: 起始rank值
-            rank_end: 结束rank值
-            resume: 是否从检查点恢复
-        """
-        asyncio.run(self.evaluate_consistency_async(citation_file, excel_file, rank_start, rank_end, resume))
 
 
 def main():
@@ -1075,20 +803,12 @@ def main():
     主函数
     """
     parser = argparse.ArgumentParser(description='使用阿里云百炼API评估标注句子与引文内容一致性')
-    parser.add_argument('--api-key', help='阿里云百炼API密钥（可选，默认从AL_KEY环境变量读取）')
+    parser.add_argument('--api-key', help='阿里云百炼API密钥（可选，默认从DASHSCOPE_API_KEY环境变量读取）')
     parser.add_argument('--rank-start', type=int, default=10, help='起始rank值')
     parser.add_argument('--rank-end', type=int, default=20, help='结束rank值')
-    parser.add_argument('--concurrent-limit', type=int, default=10, help='并发限制数量')
-    # 获取项目根目录路径
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(script_dir))
-    
-    parser.add_argument('--citation-file', 
-                        default=os.path.join(project_root, 'data', 'input', 'citation_results.json'),
+    parser.add_argument('--citation-file', default='../../results/citation_results.json',
                         help='citation_results.json文件路径')
-    parser.add_argument('--excel-file', 
-                        default=os.path.join(project_root, 'data', 'input', '正文引文内容（纯净版）.xlsx'),
-                        help='Excel文件路径')
+    parser.add_argument('--excel-file', default='../../data/正文引文内容.xlsx', help='Excel文件路径')
     parser.add_argument('--no-resume', action='store_true', help='不从检查点恢复，重新开始评估')
 
     args = parser.parse_args()
@@ -1098,7 +818,7 @@ def main():
     print(f"断点续传: {'禁用' if args.no_resume else '启用'}\n")
 
     # 创建评估器
-    evaluator = ConsistencyEvaluator(api_key=args.api_key, rank_start=args.rank_start, rank_end=args.rank_end, concurrent_limit=args.concurrent_limit)
+    evaluator = ConsistencyEvaluator(api_key=args.api_key, rank_start=args.rank_start, rank_end=args.rank_end)
 
     # 开始评估
     evaluator.evaluate_consistency(
