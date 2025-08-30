@@ -13,19 +13,48 @@ import os
 import re
 from typing import Dict, List, Any
 import time
+from ..utils.api_client import create_api_client
 
 
 class Method1BailianAnalyzer:
-    def __init__(self, concurrent_limit: int = 50):
-        self.api_key = os.getenv('AL_KEY')
-        self.api_ep = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
-        self.model = 'qwen-plus-latest'  # 百炼的模型名
+    def __init__(self, concurrent_limit: int = 50, api_key: str = None, provider: str = "alibaba",
+                 base_url: str = None, model: str = None):
+        """
+        初始化引文分析器，支持多个API提供商
+        
+        Args:
+            concurrent_limit: 并发限制
+            api_key: API密钥
+            provider: API提供商 ('alibaba', 'openai', 'deepseek', 'nuwaapi')
+            base_url: API基础URL（可选，默认使用提供商的默认URL）
+            model: 模型名称（可选，默认使用提供商的推荐模型）
+        """
+        self.provider = provider.lower()
         self.concurrent_limit = concurrent_limit
+        
+        # 配置API提供商
+        self._configure_provider(api_key, base_url, model)
+        
+        print(f"正在使用提供商: {self.provider}")
         print(f"正在使用模型: {self.model}")
         print(f"并发限制: {self.concurrent_limit}条")
 
         if not self.api_key:
-            print("警告：未找到AL_KEY环境变量，无法调用百炼API")
+            print(f"警告：未找到API密钥，无法调用{self.provider} API")
+    
+    def _configure_provider(self, api_key: str, base_url: str, model: str):
+        """配置不同的API提供商"""
+        # 修正NUWA_KEY环境变量名
+        if self.provider == "nuwaapi":
+            api_key = api_key or os.getenv('NUWA_KEY')
+        
+        # 使用通用API客户端
+        self.api_client = create_api_client(self.provider, api_key, base_url, model)
+        
+        # 保持兼容性
+        self.api_key = self.api_client.api_key
+        self.api_ep = self.api_client.base_url
+        self.model = self.api_client.model
 
     def count_chars(self, text: str) -> int:
         """简单的字符计数估算token"""
@@ -179,12 +208,12 @@ class Method1BailianAnalyzer:
 
         return prompt_start + citations_text + analysis_requirements
 
-    async def call_api_async(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
-        """异步调用百炼API，支持重试机制"""
+    async def _call_alibaba_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
+        """异步调用阿里云百炼API"""
         if not self.api_key:
             return {
                 'success': False,
-                'error': '缺少AL_KEY环境变量',
+                'error': '缺少API密钥',
                 'content': None
             }
 
@@ -209,43 +238,31 @@ class Method1BailianAnalyzer:
             }
         }
 
-        prompt_tokens = self.count_chars(prompt)
-
         # 重试循环
         last_error = None
         for attempt in range(max_retries):
             try:
-                # 延长超时时间到180秒
                 timeout = aiohttp.ClientTimeout(total=180)
-
                 async with session.post(self.api_ep, headers=headers, json=data, timeout=timeout) as response:
-                    # 检查HTTP状态码
                     if response.status == 200:
-                        # 成功响应
                         result = await response.json()
-
                         if result.get('output') and result['output'].get('text'):
-                            content = result['output']['text']
-                            response_tokens = self.count_chars(content)
                             return {
                                 'success': True,
                                 'error': None,
-                                'content': content
+                                'content': result['output']['text']
                             }
                         else:
                             last_error = f'API返回格式异常: {result}'
-                            # 格式异常通常不需要重试
                             break
 
                     elif response.status == 429:
-                        # 频率限制，需要等待后重试
                         last_error = 'API调用频率超限'
-                        if attempt < max_retries - 1:  # 不是最后一次尝试
+                        if attempt < max_retries - 1:
                             await asyncio.sleep(30)
                             continue
 
                     elif response.status >= 500:
-                        # 服务器错误，可以重试
                         response_text = await response.text()
                         last_error = f'服务器错误: {response.status} - {response_text[:200]}'
                         if attempt < max_retries - 1:
@@ -253,7 +270,6 @@ class Method1BailianAnalyzer:
                             continue
 
                     elif response.status in [401, 403]:
-                        # 认证错误，不需要重试
                         response_text = await response.text()
                         return {
                             'success': False,
@@ -262,7 +278,6 @@ class Method1BailianAnalyzer:
                         }
 
                     else:
-                        # 其他客户端错误，通常不需要重试
                         response_text = await response.text()
                         last_error = f'客户端错误: {response.status} - {response_text[:200]}'
                         break
@@ -273,10 +288,92 @@ class Method1BailianAnalyzer:
                     await asyncio.sleep(15)
                     continue
 
-            except aiohttp.ClientConnectionError:
-                last_error = '网络连接失败'
+            except Exception as e:
+                last_error = f'未知错误: {str(e)}'
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(5)
+                    continue
+
+        return {
+            'success': False,
+            'error': last_error or 'API调用失败',
+            'content': None
+        }
+
+    async def _call_openai_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
+        """异步调用OpenAI兼容的API（包括OpenAI、DeepSeek、NuwaAPI）"""
+        if not self.api_key:
+            return {
+                'success': False,
+                'error': '缺少API密钥',
+                'content': None
+            }
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.api_key}'
+        }
+
+        data = {
+            'model': self.model,
+            'messages': [
+                {
+                    'role': 'user',
+                    'content': prompt
+                }
+            ],
+            'temperature': 0.2,
+            'max_tokens': 15000
+        }
+
+        # 重试循环
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                timeout = aiohttp.ClientTimeout(total=180)
+                async with session.post(self.api_ep, headers=headers, json=data, timeout=timeout) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result.get('choices') and len(result['choices']) > 0:
+                            return {
+                                'success': True,
+                                'error': None,
+                                'content': result['choices'][0]['message']['content']
+                            }
+                        else:
+                            last_error = f'API返回格式异常: {result}'
+                            break
+
+                    elif response.status == 429:
+                        last_error = 'API调用频率超限'
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(30)
+                            continue
+
+                    elif response.status >= 500:
+                        response_text = await response.text()
+                        last_error = f'服务器错误: {response.status} - {response_text[:200]}'
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(10)
+                            continue
+
+                    elif response.status in [401, 403]:
+                        response_text = await response.text()
+                        return {
+                            'success': False,
+                            'error': f'认证错误: {response.status} - {response_text[:200]}',
+                            'content': None
+                        }
+
+                    else:
+                        response_text = await response.text()
+                        last_error = f'客户端错误: {response.status} - {response_text[:200]}'
+                        break
+
+            except asyncio.TimeoutError:
+                last_error = '网络超时(180秒)'
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(15)
                     continue
 
             except Exception as e:
@@ -285,19 +382,22 @@ class Method1BailianAnalyzer:
                     await asyncio.sleep(5)
                     continue
 
-        # 所有重试都失败了
         return {
             'success': False,
             'error': last_error or 'API调用失败',
             'content': None
         }
 
-    def call_api(self, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
-        """调用百炼API，支持重试机制"""
+    async def call_api_async(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
+        """异步调用API（支持多提供商）"""
+        return await self.api_client.call_async(session, prompt, max_retries=max_retries)
+
+    def _call_alibaba_api_sync(self, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
+        """同步调用阿里云百炼API"""
         if not self.api_key:
             return {
                 'success': False,
-                'error': '缺少AL_KEY环境变量',
+                'error': '缺少API密钥',
                 'content': None
             }
 
@@ -323,7 +423,7 @@ class Method1BailianAnalyzer:
         }
 
         prompt_tokens = self.count_chars(prompt)
-        print(f"    调用百炼API... (估算请求Token: {prompt_tokens})")
+        print(f"    调用阿里云API... (估算请求Token: {prompt_tokens})")
 
         # 重试循环
         last_error = None
@@ -332,12 +432,9 @@ class Method1BailianAnalyzer:
                 if attempt > 0:
                     print(f"    第{attempt + 1}次重试...")
 
-                # 延长超时时间到180秒
                 response = requests.post(self.api_ep, headers=headers, json=data, timeout=180)
 
-                # 检查HTTP状态码
                 if response.status_code == 200:
-                    # 成功响应
                     result = response.json()
                     print(f"    API调用成功 (第{attempt + 1}次尝试)")
 
@@ -353,19 +450,16 @@ class Method1BailianAnalyzer:
                     else:
                         print(f"    API返回格式异常: {result}")
                         last_error = f'API返回格式异常: {result}'
-                        # 格式异常通常不需要重试
                         break
 
                 elif response.status_code == 429:
-                    # 频率限制，需要等待后重试
                     print(f"    API调用频率超限 (第{attempt + 1}次尝试)，等待30秒后重试")
                     last_error = 'API调用频率超限'
-                    if attempt < max_retries - 1:  # 不是最后一次尝试
+                    if attempt < max_retries - 1:
                         time.sleep(30)
                         continue
 
                 elif response.status_code >= 500:
-                    # 服务器错误，可以重试
                     print(f"    服务器错误 {response.status_code} (第{attempt + 1}次尝试)，等待10秒后重试")
                     last_error = f'服务器错误: {response.status_code} - {response.text[:200]}'
                     if attempt < max_retries - 1:
@@ -373,7 +467,6 @@ class Method1BailianAnalyzer:
                         continue
 
                 elif response.status_code in [401, 403]:
-                    # 认证错误，不需要重试
                     print(f"    认证错误 {response.status_code}，请检查API密钥")
                     return {
                         'success': False,
@@ -382,7 +475,6 @@ class Method1BailianAnalyzer:
                     }
 
                 else:
-                    # 其他客户端错误，通常不需要重试
                     print(f"    客户端错误 {response.status_code}")
                     last_error = f'客户端错误: {response.status_code} - {response.text[:200]}'
                     break
@@ -411,13 +503,130 @@ class Method1BailianAnalyzer:
                     time.sleep(5)
                     continue
 
-        # 所有重试都失败了
         print(f"    API调用最终失败，已重试{max_retries}次")
         return {
             'success': False,
             'error': last_error or 'API调用失败',
             'content': None
         }
+
+    def _call_openai_api_sync(self, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
+        """同步调用OpenAI兼容的API（包括OpenAI、DeepSeek、NuwaAPI）"""
+        if not self.api_key:
+            return {
+                'success': False,
+                'error': '缺少API密钥',
+                'content': None
+            }
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.api_key}'
+        }
+
+        data = {
+            'model': self.model,
+            'messages': [
+                {
+                    'role': 'user',
+                    'content': prompt
+                }
+            ],
+            'temperature': 0.2,
+            'max_tokens': 15000
+        }
+
+        prompt_tokens = self.count_chars(prompt)
+        print(f"    调用{self.provider}API... (估算请求Token: {prompt_tokens})")
+
+        # 重试循环
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    print(f"    第{attempt + 1}次重试...")
+
+                response = requests.post(self.api_ep, headers=headers, json=data, timeout=180)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    print(f"    API调用成功 (第{attempt + 1}次尝试)")
+
+                    if result.get('choices') and len(result['choices']) > 0:
+                        content = result['choices'][0]['message']['content']
+                        response_tokens = self.count_chars(content)
+                        print(f"    估算响应Token: {response_tokens}")
+                        return {
+                            'success': True,
+                            'error': None,
+                            'content': content
+                        }
+                    else:
+                        print(f"    API返回格式异常: {result}")
+                        last_error = f'API返回格式异常: {result}'
+                        break
+
+                elif response.status_code == 429:
+                    print(f"    API调用频率超限 (第{attempt + 1}次尝试)，等待30秒后重试")
+                    last_error = 'API调用频率超限'
+                    if attempt < max_retries - 1:
+                        time.sleep(30)
+                        continue
+
+                elif response.status_code >= 500:
+                    print(f"    服务器错误 {response.status_code} (第{attempt + 1}次尝试)，等待10秒后重试")
+                    last_error = f'服务器错误: {response.status_code} - {response.text[:200]}'
+                    if attempt < max_retries - 1:
+                        time.sleep(10)
+                        continue
+
+                elif response.status_code in [401, 403]:
+                    print(f"    认证错误 {response.status_code}，请检查API密钥")
+                    return {
+                        'success': False,
+                        'error': f'认证错误: {response.status_code} - {response.text[:200]}',
+                        'content': None
+                    }
+
+                else:
+                    print(f"    客户端错误 {response.status_code}")
+                    last_error = f'客户端错误: {response.status_code} - {response.text[:200]}'
+                    break
+
+            except requests.exceptions.Timeout:
+                print(f"    网络超时 (第{attempt + 1}次尝试，180秒)")
+                last_error = '网络超时(180秒)'
+                if attempt < max_retries - 1:
+                    print(f"    等待15秒后进行第{attempt + 2}次尝试")
+                    time.sleep(15)
+                    continue
+
+            except requests.exceptions.ConnectionError:
+                print(f"    网络连接失败 (第{attempt + 1}次尝试)")
+                last_error = '网络连接失败'
+                if attempt < max_retries - 1:
+                    print(f"    等待10秒后进行第{attempt + 2}次尝试")
+                    time.sleep(10)
+                    continue
+
+            except Exception as e:
+                print(f"    未知错误 (第{attempt + 1}次尝试): {str(e)}")
+                last_error = f'未知错误: {str(e)}'
+                if attempt < max_retries - 1:
+                    print(f"    等待5秒后进行第{attempt + 2}次尝试")
+                    time.sleep(5)
+                    continue
+
+        print(f"    API调用最终失败，已重试{max_retries}次")
+        return {
+            'success': False,
+            'error': last_error or 'API调用失败',
+            'content': None
+        }
+
+    def call_api(self, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
+        """同步调用API（支持多提供商）"""
+        return self.api_client.call_sync(prompt, max_retries=max_retries)
 
     def analyze_citation_quality(self, row: pd.Series) -> Dict[str, Any]:
         """分析单行数据的引用质量"""

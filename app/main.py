@@ -7,7 +7,8 @@ import asyncio
 
 # Import the logic classes
 from .logic.citation_analyzer_fulltext import Method1BailianAnalyzer as CitationAnalyzer
-from .logic.citation_analyzer_sliced import ConsistencyEvaluator as SlicedAnalyzer
+from .logic.citation_analyzer_sync import ConsistencyEvaluator as SyncAnalyzer
+from .logic.citation_analyzer_async import ConsistencyEvaluator as AsyncAnalyzer
 
 app = FastAPI()
 
@@ -27,14 +28,6 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
-try:
-    sliced_analyzer = SlicedAnalyzer()
-    print("✅ Sliced分析器初始化成功")
-except Exception as e:
-    print(f"❌ Sliced分析器初始化失败：{e}")
-    import traceback
-    traceback.print_exc()
-
 print("🎯 分析器初始化完成")
 
 # --- Pydantic Models ---
@@ -48,9 +41,24 @@ class AnalysisRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serve the main index.html file."""
-    index_path = os.path.join(static_dir, "index.html")
-    with open(index_path, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
+    try:
+        index_path = os.path.join(static_dir, "index.html")
+        print(f"🔍 尝试读取文件: {index_path}")
+        
+        if not os.path.exists(index_path):
+            print(f"❌ 文件不存在: {index_path}")
+            return HTMLResponse(content="<h1>错误：index.html文件不存在</h1>", status_code=404)
+        
+        with open(index_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            print(f"✅ 成功读取index.html，大小: {len(content)} 字符")
+            return HTMLResponse(content=content)
+            
+    except Exception as e:
+        print(f"❌ 读取index.html出错: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return HTMLResponse(content=f"<h1>错误：无法读取index.html</h1><p>{str(e)}</p>", status_code=500)
 
 @app.post("/api/analyze")
 async def analyze_text(request: AnalysisRequest):
@@ -65,19 +73,14 @@ async def analyze_text(request: AnalysisRequest):
         citations_dict=request.citations
     )
     
-    consistency_task = asyncio.to_thread(sliced_analyzer.evaluate, request.text)
-
-    # Run tasks concurrently and wait for results
-    citation_results, consistency_results = await asyncio.gather(
-        citation_task,
-        consistency_task
-    )
+    # 只运行引文分析（暂时移除一致性评估）
+    citation_results = await citation_task
 
     # Combine results into a single response
     return JSONResponse(content={
         "original_text_preview": request.text[:200] + "...",
         "citation_analysis": citation_results,
-        "consistency_evaluation": consistency_results,
+        "consistency_evaluation": "已移除旧版sliced分析器，请使用新版evaluator",
         # Placeholder for hallucination detection
         "hallucination_detection": "Not implemented yet."
     })
@@ -146,17 +149,236 @@ async def analyze_xlsx_file(
         
         # 根据分析类型选择分析器
         if analysis_type == 'sliced':
-            # 使用sliced版本分析器，支持多API提供商
-            analyzer = SlicedAnalyzer(
-                api_key=api_key,
-                provider=api_provider,
-                base_url=api_base_url if api_base_url else None,
-                model=api_model if api_model else None
-            )
-            results = await analyzer.analyze_xlsx_file(
-                file_content=file_content,
-                filename=file.filename
-            )
+            # 获取执行模式（同步或异步）
+            execution_mode = request.headers.get('X-Execution-Mode', 'sync')
+            print(f"🔄 使用Sliced分析，执行模式: {execution_mode}")
+            
+            if execution_mode == 'sync':
+                # 使用同步版analyzer
+                print("🔄 使用同步版Sliced Analyzer进行分析...")
+                analyzer = SyncAnalyzer(
+                    provider=api_provider,
+                    model=api_model if api_model else None,
+                    api_key=api_key
+                )
+            else:
+                # 使用异步版analyzer
+                print("🔄 使用异步版Sliced Analyzer进行分析...")
+                analyzer = AsyncAnalyzer(
+                    provider=api_provider,
+                    model=api_model if api_model else None,
+                    api_key=api_key
+                )
+            
+            # 创建临时文件进行分析
+            import tempfile
+            import json
+            
+            # 创建临时Excel文件
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
+                temp_excel.write(file_content)
+                temp_excel_path = temp_excel.name
+            
+            try:
+                print(f"🔄 开始使用{execution_mode}模式Sliced Analyzer进行真实分析...")
+                
+                # 读取Excel文件数据
+                import pandas as pd
+                import io
+                
+                try:
+                    # 将文件内容转换为DataFrame
+                    df = pd.read_excel(io.BytesIO(file_content))
+                    print(f"📊 Excel文件读取成功，共{len(df)}行数据")
+                    
+                    # 根据分析模式筛选数据
+                    if analysis_mode == 'head' and num_samples:
+                        df_to_analyze = df.head(num_samples)
+                        print(f"🔍 分析前{num_samples}条数据")
+                    elif analysis_mode == 'specific' and specific_rank:
+                        if specific_rank <= len(df):
+                            df_to_analyze = df.iloc[[specific_rank - 1]]  # -1 因为索引从0开始
+                            print(f"🔍 分析第{specific_rank}条数据")
+                        else:
+                            raise ValueError(f"指定的rank {specific_rank} 超出数据范围（共{len(df)}行）")
+                    elif analysis_mode == 'range' and start_from:
+                        start_idx = start_from - 1  # -1 因为索引从0开始
+                        if num_samples:
+                            end_idx = start_idx + num_samples
+                            df_to_analyze = df.iloc[start_idx:end_idx]
+                            print(f"🔍 分析从第{start_from}条开始的{num_samples}条数据")
+                        else:
+                            df_to_analyze = df.iloc[start_idx:]
+                            print(f"🔍 分析从第{start_from}条到结尾的数据")
+                    else:
+                        df_to_analyze = df
+                        print(f"🔍 分析所有{len(df)}条数据")
+                    
+                    print(f"📈 实际分析数据行数：{len(df_to_analyze)}")
+                    
+                    # 真正调用analyzer进行分析
+                    import datetime
+                    analysis_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # 使用citation_processor处理Excel文件，提取引文标注
+                    from .logic.citation_processor import process_excel_file
+                    
+                    # 保存临时Excel文件内容到磁盘供citation_processor使用
+                    temp_excel_for_processing_fd, temp_excel_for_processing = tempfile.mkstemp(suffix='.xlsx', prefix='excel_for_processing_')
+                    with os.fdopen(temp_excel_for_processing_fd, 'wb') as f:
+                        f.write(file_content)
+                    
+                    print("🔄 使用citation_processor提取引文标注...")
+                    try:
+                        # 使用citation_processor提取引文标注的句子
+                        citation_results = process_excel_file(temp_excel_for_processing)
+                        print(f"📊 提取到{len(citation_results)}个包含引文标注的句子")
+                        
+                        # 根据分析模式筛选citation_results
+                        if analysis_mode == 'head' and num_samples:
+                            # 获取前N个rank的数据
+                            citation_results = [r for r in citation_results if r['rank'] <= num_samples]
+                        elif analysis_mode == 'specific' and specific_rank:
+                            # 获取特定rank的数据
+                            citation_results = [r for r in citation_results if r['rank'] == specific_rank]
+                        elif analysis_mode == 'range' and start_from:
+                            # 获取范围内的数据
+                            if num_samples:
+                                end_rank = start_from + num_samples - 1
+                                citation_results = [r for r in citation_results if start_from <= r['rank'] <= end_rank]
+                            else:
+                                citation_results = [r for r in citation_results if r['rank'] >= start_from]
+                        
+                        print(f"📈 筛选后待分析数据：{len(citation_results)}条")
+                        
+                    except Exception as e:
+                        print(f"❌ citation_processor处理失败：{e}")
+                        citation_results = []
+                    finally:
+                        # 清理临时文件
+                        try:
+                            os.unlink(temp_excel_for_processing)
+                        except:
+                            pass
+                    
+                    # 创建临时文件
+                    import tempfile
+                    import json
+                    
+                    # 创建临时citation_results.json文件
+                    temp_citation_fd, temp_citation_path = tempfile.mkstemp(suffix='.json', prefix='citation_results_')
+                    with os.fdopen(temp_citation_fd, 'w', encoding='utf-8') as f:
+                        json.dump(citation_results, f, ensure_ascii=False, indent=2)
+                    
+                    try:
+                        # 确定分析范围
+                        if analysis_mode == 'head' and num_samples:
+                            rank_start, rank_end = 1, num_samples
+                        elif analysis_mode == 'specific' and specific_rank:
+                            rank_start, rank_end = specific_rank, specific_rank
+                        elif analysis_mode == 'range' and start_from:
+                            if num_samples:
+                                rank_start, rank_end = start_from, start_from + num_samples - 1
+                            else:
+                                rank_start, rank_end = start_from, len(df_to_analyze)
+                        else:
+                            rank_start, rank_end = 1, len(df_to_analyze)
+                        
+                        print(f"🔍 调用analyzer分析 rank {rank_start} 到 {rank_end}")
+                        
+                        # 调用analyzer
+                        if execution_mode == 'sync':
+                            # 同步模式
+                            print("🔄 开始同步分析...")
+                            analyzer_results = analyzer.evaluate_consistency(
+                                citation_file=temp_citation_path,
+                                excel_file=temp_excel_path,
+                                rank_start=rank_start,
+                                rank_end=rank_end
+                            )
+                        else:
+                            # 异步模式
+                            print("🔄 开始异步分析...")
+                            analyzer_results = await analyzer.evaluate_consistency_async(
+                                citation_file=temp_citation_path,
+                                excel_file=temp_excel_path,
+                                rank_start=rank_start,
+                                rank_end=rank_end
+                            )
+                        
+                        # 处理analyzer结果
+                        results = []
+                        if analyzer_results and isinstance(analyzer_results, list):
+                            for result in analyzer_results:
+                                # 构建分析结果文本
+                                analysis_text = f"一致性评估：{result.get('consistency', '未知')}\n"
+                                analysis_text += f"引用内容：{result.get('citation_topic', '无')}\n"
+                                analysis_text += f"分析原因：{result.get('reason', '无')}"
+                                
+                                # 计算一致性分数（一致=1.0，不一致=0.0）
+                                consistency = result.get('consistency', '')
+                                consistency_score = 1.0 if consistency == '一致' else 0.0
+                                
+                                processed_result = {
+                                    "rank": result.get("rank", 0),
+                                    "api_success": True,  # 如果返回了结果说明API调用成功
+                                    "analysis_type": "sliced",
+                                    "execution_mode": execution_mode,
+                                    "analysis_mode": analysis_mode,
+                                    "provider": api_provider,
+                                    "model": api_model or "default",
+                                    "analysis_time": analysis_time,
+                                    "message": f"Sliced分析完成 - {execution_mode}模式，第{result.get('rank', 0)}行",
+                                    "status": "success",
+                                    "question": result.get("topic", "")[:200],
+                                    "analysis": analysis_text,
+                                    "citations_found": result.get("citation_numbers", []),
+                                    "consistency_score": consistency_score,
+                                    "processing_time": "1.0s"  # 简化处理时间显示
+                                }
+                                results.append(processed_result)
+                        else:
+                            # 如果analyzer没有返回结果，创建错误信息
+                            results = [{
+                                "rank": 1,
+                                "api_success": False,
+                                "analysis_type": "sliced",
+                                "execution_mode": execution_mode,
+                                "status": "failed",
+                                "message": "Analyzer调用失败",
+                                "error": "Analyzer未返回有效结果",
+                                "analysis": f"Sliced analyzer调用失败，可能的原因：\n1. 数据格式不匹配\n2. API调用失败\n3. 文件处理错误"
+                            }]
+                        
+                        print(f"✅ Sliced analyzer分析完成，获得{len(results)}条结果")
+                        
+                    finally:
+                        # 清理临时citation文件
+                        try:
+                            os.unlink(temp_citation_path)
+                        except:
+                            pass
+                    
+                except Exception as e:
+                    print(f"❌ Excel文件处理失败：{str(e)}")
+                    # 如果Excel处理失败，返回错误信息
+                    results = [{
+                        "rank": 1,
+                        "api_success": False,
+                        "analysis_type": "sliced",
+                        "execution_mode": execution_mode,
+                        "status": "failed",
+                        "message": "Excel文件处理失败",
+                        "error": str(e),
+                        "analysis": f"无法处理Excel文件：{str(e)}\n\n请确保文件格式正确，包含必要的列：模型prompt、答案、引文1-引文20"
+                    }]
+                
+            finally:
+                # 清理临时文件
+                try:
+                    os.unlink(temp_excel_path)
+                except:
+                    pass
         else:
             # 使用fulltext版本分析器（默认）
             citation_analyzer.api_key = api_key  # 设置API Key
