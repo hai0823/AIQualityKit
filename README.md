@@ -9,7 +9,7 @@
 *   **引文分析 (Citation Analysis)**：验证AI回答中引用的来源是否真实、相关。
 *   **一致性评估 (Consistency Evaluation)**：检查AI在回答中是否存在前后矛盾或逻辑不一致的地方。
 *   **幻觉检测 (Hallucination Detection)**：识别并标记出AI回答中可能包含的虚假或捏造的信息。
-*   **多API支持**：统一支持阿里云百炼、OpenAI、DeepSeek、NuwaAPI等多个AI服务提供商。
+*   **多API支持**：统一支持阿里云百炼、OpenAI、DeepSeek等多个AI服务提供商。
 *   **Web界面**：提供一个简单直观的前端页面，方便手动输入文本并获取即时分析结果。
 *   **RESTful API**：提供标准API接口，便于集成到其他自动化测试流程中。
 *   **批量处理**：支持Excel文件批量分析，提供断点续传功能。
@@ -113,6 +113,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
   - `app/logic/citation_analyzer_async.py` - 异步并发处理
   - `app/logic/citation_analyzer_sync.py` - 同步顺序处理  
   - `app/logic/citation_analyzer_sliced.py` - 统一分片处理接口
+- **幻觉检测器**: `app/logic/hallucination_detector_simplified.py` - 五分类幻觉检测
 - **引文处理器**: `app/logic/citation_processor.py` - 提取引文标注的句子
 
 ### 数据处理流程
