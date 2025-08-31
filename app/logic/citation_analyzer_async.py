@@ -147,6 +147,7 @@ class ConsistencyEvaluator:
                         "citation_topic": "评估失败",
                         "consistency": "不一致",
                         "reason": "分批处理时API调用失败或响应解析失败",
+                        "qualitative_analysis": "评估失败",
                         "rank": rank,
                         "citation_numbers": topic_data["citation_numbers"]
                     }
@@ -493,6 +494,7 @@ Rank: {rank}
                     'citation_topic': result['citation_topic'],
                     'consistency': consistency_value,
                     'reason': result['reason'],
+                    'qualitative_analysis': result.get('qualitative_analysis', ''),
                     'rank': batch_data['rank'],
                     'citation_numbers': result['citation_numbers']
                 }
@@ -811,6 +813,7 @@ Rank: {rank}
                         "citation_topic": "评估失败",
                         "consistency": "不一致",
                         "reason": "API调用失败或响应解析失败，无法获取评估结果",
+                        "qualitative_analysis": "评估失败",
                         "rank": rank,
                         "citation_numbers": topic_data["citation_numbers"]
                     }
@@ -861,6 +864,7 @@ Rank: {rank}
                             'citation_topic': result.get('citation_topic', ''),
                             'consistency': consistency_value,
                             'reason': result['reason'],
+                            'qualitative_analysis': result.get('qualitative_analysis', ''),
                             'rank': batch_data['rank'],
                             'citation_numbers': result['citation_numbers']
                         }
