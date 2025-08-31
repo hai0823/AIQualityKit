@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Quality Kit - 引文分析工具</title>
+    <title>AI Quality Kit - AI内容质量分析工具</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
         <h1>AI Quality Kit</h1>
-        <p>上传Excel文件进行引文分析，支持Fulltext（完整引文分析）和Sliced（引文一致性评估）模式</p>
+        <p>上传Excel文件进行AI内容质量分析，支持Fulltext（完整引文分析）、Sliced（引文一致性评估）和Hallucination（幻觉检测）模式</p>
         
         <!-- API配置区域 -->
         <div class="config-section">
@@ -21,7 +21,6 @@
                     <option value="alibaba">阿里云百炼 (Qwen)</option>
                     <option value="openai">OpenAI (GPT)</option>
                     <option value="deepseek">DeepSeek</option>
-                    <option value="nuwaapi">NuwaAPI (代理服务)</option>
                 </select>
             </div>
             
@@ -70,6 +69,10 @@
                 <label>
                     <input type="radio" name="analysis-type" value="sliced">
                     Sliced分析 (引文一致性评估)
+                </label>
+                <label>
+                    <input type="radio" name="analysis-type" value="hallucination">
+                    Hallucination分析 (幻觉检测)
                 </label>
             </div>
             
@@ -170,6 +173,47 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Hallucination详细选项 -->
+            <div id="hallucination-options" class="detailed-options" style="display: none;">
+                <h4>Hallucination分析详细选项</h4>
+                <div class="detailed-option-group">
+                    <label>
+                        <input type="radio" name="hallucination-mode" value="all" checked>
+                        分析所有数据
+                    </label>
+                    <label>
+                        <input type="radio" name="hallucination-mode" value="head">
+                        分析前N条数据
+                    </label>
+                    <label>
+                        <input type="radio" name="hallucination-mode" value="specific">
+                        分析指定rank的单条数据
+                    </label>
+                    <label>
+                        <input type="radio" name="hallucination-mode" value="range">
+                        从指定位置开始分析
+                    </label>
+                </div>
+                
+                <!-- 数值输入区域 -->
+                <div class="number-inputs">
+                    <div class="input-row" id="hallucination-head-input" style="display: none;">
+                        <label>分析数量:</label>
+                        <input type="number" id="hallucination-num-samples" min="1" placeholder="例如: 10">
+                    </div>
+                    <div class="input-row" id="hallucination-specific-input" style="display: none;">
+                        <label>Rank编号:</label>
+                        <input type="number" id="hallucination-specific-rank" min="1" placeholder="例如: 5">
+                    </div>
+                    <div class="input-row" id="hallucination-range-input" style="display: none;">
+                        <label>起始位置:</label>
+                        <input type="number" id="hallucination-start-from" min="1" placeholder="例如: 10">
+                        <label>分析数量 (可选):</label>
+                        <input type="number" id="hallucination-range-count" min="1" placeholder="留空表示到结尾">
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- 操作按钮 -->
@@ -184,14 +228,6 @@
             <pre id="results-output">选择文件并配置API Key后开始分析...</pre>
         </div>
 
-        <!-- 原有的文本分析功能 -->
-        <hr>
-        <div class="text-analysis-section">
-            <h3>文本分析 (旧功能)</h3>
-            <p>直接输入文本进行质量分析 (引文、一致性、幻觉检测)</p>
-            <textarea id="text-input" rows="8" placeholder="在此粘贴AI生成的文本..."></textarea>
-            <button id="analyze-btn">分析文本</button>
-        </div>
     </div>
     <script src="/static/script.js"></script>
 </body>

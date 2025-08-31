@@ -19,8 +19,6 @@ const fileInfo = document.getElementById('file-info');
 const analyzeXlsxBtn = document.getElementById('analyze-xlsx-btn');
 const progressInfo = document.getElementById('progress-info');
 const resultsOutput = document.getElementById('results-output');
-const analyzeBtn = document.getElementById('analyze-btn');
-const textInput = document.getElementById('text-input');
 
 // 初始化事件监听器
 document.addEventListener('DOMContentLoaded', function() {
@@ -87,11 +85,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    // Hallucination详细选项监听
+    document.querySelectorAll('input[name="hallucination-mode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            showHallucinationInputs(this.value);
+        });
+    });
+
     // Excel分析按钮点击
     analyzeXlsxBtn.addEventListener('click', analyzeXlsxFile);
 
-    // 原有的文本分析按钮
-    analyzeBtn.addEventListener('click', analyzeText);
 
     // 初始化界面状态
     updateDefaultModel();
@@ -138,15 +141,24 @@ function hideProgress() {
 function toggleAnalysisOptions(analysisType) {
     const fulltextOptions = document.getElementById('fulltext-options');
     const slicedOptions = document.getElementById('sliced-options');
+    const hallucinationOptions = document.getElementById('hallucination-options');
     
     if (analysisType === 'fulltext') {
         fulltextOptions.style.display = 'block';
         slicedOptions.style.display = 'none';
+        hallucinationOptions.style.display = 'none';
     } else if (analysisType === 'sliced') {
         fulltextOptions.style.display = 'none';
         slicedOptions.style.display = 'block';
+        hallucinationOptions.style.display = 'none';
         // 初始化sliced输入框显示
         showSlicedInputs('all');
+    } else if (analysisType === 'hallucination') {
+        fulltextOptions.style.display = 'none';
+        slicedOptions.style.display = 'none';
+        hallucinationOptions.style.display = 'block';
+        // 初始化hallucination输入框显示
+        showHallucinationInputs('all');
     }
 }
 
@@ -188,6 +200,27 @@ function showSlicedInputs(mode) {
             break;
         case 'range':
             document.getElementById('sliced-range-input').style.display = 'flex';
+            break;
+    }
+}
+
+// 显示Hallucination相关输入框
+function showHallucinationInputs(mode) {
+    // 隐藏所有hallucination输入框
+    document.getElementById('hallucination-head-input').style.display = 'none';
+    document.getElementById('hallucination-specific-input').style.display = 'none';
+    document.getElementById('hallucination-range-input').style.display = 'none';
+    
+    // 显示相关输入框
+    switch (mode) {
+        case 'head':
+            document.getElementById('hallucination-head-input').style.display = 'flex';
+            break;
+        case 'specific':
+            document.getElementById('hallucination-specific-input').style.display = 'flex';
+            break;
+        case 'range':
+            document.getElementById('hallucination-range-input').style.display = 'flex';
             break;
     }
 }
@@ -260,6 +293,35 @@ function getAnalysisOptions() {
                 }
                 break;
         }
+    } else if (analysisType === 'hallucination') {
+        // 获取分析范围
+        const hallucinationMode = document.querySelector('input[name="hallucination-mode"]:checked').value;
+        options['X-Analysis-Mode'] = hallucinationMode;
+
+        switch (hallucinationMode) {
+            case 'head':
+                const numSamples = document.getElementById('hallucination-num-samples').value;
+                if (numSamples) {
+                    options['X-Num-Samples'] = numSamples;
+                }
+                break;
+            case 'specific':
+                const specificRank = document.getElementById('hallucination-specific-rank').value;
+                if (specificRank) {
+                    options['X-Specific-Rank'] = specificRank;
+                }
+                break;
+            case 'range':
+                const startFrom = document.getElementById('hallucination-start-from').value;
+                const rangeCount = document.getElementById('hallucination-range-count').value;
+                if (startFrom) {
+                    options['X-Start-From'] = startFrom;
+                    if (rangeCount) {
+                        options['X-Num-Samples'] = rangeCount;
+                    }
+                }
+                break;
+        }
     }
 
     return options;
@@ -300,6 +362,20 @@ async function analyzeXlsxFile() {
         const mode = analysisOptions['X-Analysis-Mode'];
         
         progressMsg += ` - ${executionMode}模式`;
+        
+        if (mode === 'head' && analysisOptions['X-Num-Samples']) {
+            progressMsg += ` (前${analysisOptions['X-Num-Samples']}条)`;
+        } else if (mode === 'specific' && analysisOptions['X-Specific-Rank']) {
+            progressMsg += ` (第${analysisOptions['X-Specific-Rank']}条)`;
+        } else if (mode === 'range' && analysisOptions['X-Start-From']) {
+            const startFrom = analysisOptions['X-Start-From'];
+            const count = analysisOptions['X-Num-Samples'] || '到结尾';
+            progressMsg += ` (从第${startFrom}条开始，${count}条)`;
+        } else {
+            progressMsg += ` (所有数据)`;
+        }
+    } else if (analysisType === 'hallucination') {
+        const mode = analysisOptions['X-Analysis-Mode'];
         
         if (mode === 'head' && analysisOptions['X-Num-Samples']) {
             progressMsg += ` (前${analysisOptions['X-Num-Samples']}条)`;
@@ -465,43 +541,6 @@ function showResults(results) {
     resultsOutput.textContent = formattedOutput;
 }
 
-// 原有的文本分析功能
-async function analyzeText() {
-    const textValue = textInput.value;
-    
-    if (!textValue.trim()) {
-        resultsOutput.textContent = '请输入要分析的文本';
-        return;
-    }
-
-    resultsOutput.textContent = '正在分析文本...';
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = '分析中...';
-
-    try {
-        const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ text: textValue }),
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const results = await response.json();
-        resultsOutput.textContent = JSON.stringify(results, null, 2);
-
-    } catch (error) {
-        console.error('Error during text analysis:', error);
-        resultsOutput.textContent = `分析出错: ${error.message}`;
-    } finally {
-        analyzeBtn.disabled = false;
-        analyzeBtn.textContent = '分析文本';
-    }
-}
 
 // API提供商相关功能
 
@@ -510,15 +549,13 @@ function updateApiKeyLabel() {
     const labels = {
         'alibaba': '百炼API Key:',
         'openai': 'OpenAI API Key:',
-        'deepseek': 'DeepSeek API Key:',
-        'nuwaapi': 'NuwaAPI Key:'
+        'deepseek': 'DeepSeek API Key:'
     };
     
     const placeholders = {
         'alibaba': '请输入百炼API Key...',
         'openai': '请输入OpenAI API Key...',
-        'deepseek': '请输入DeepSeek API Key...',
-        'nuwaapi': '请输入NuwaAPI Key...'
+        'deepseek': '请输入DeepSeek API Key...'
     };
     
     apiKeyLabel.textContent = labels[apiProvider] || 'API Key:';
@@ -531,16 +568,14 @@ function updateDefaultModel() {
     const defaultModels = {
         'alibaba': 'qwen-plus',
         'openai': 'gpt-4o',
-        'deepseek': 'deepseek-chat',
-        'nuwaapi': 'gpt-4o'
+        'deepseek': 'deepseek-chat'
     };
     
     // 定义各提供商的模型描述
     const modelDescriptions = {
         'alibaba': '推荐使用 qwen-plus, qwen-turbo, qwen-max, qwen-long 等',
         'openai': '推荐使用 gpt-4o, gpt-4o-mini, gpt-3.5-turbo 等',
-        'deepseek': '推荐使用 deepseek-chat',
-        'nuwaapi': '推荐使用 gpt-4o, gpt-4o-mini, claude-3-5-sonnet, deepseek-reasoner 等'
+        'deepseek': '推荐使用 deepseek-chat'
     };
 
     // 获取当前提供商的默认模型
