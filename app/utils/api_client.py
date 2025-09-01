@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 通用API客户端模块
-支持多个API提供商：阿里云百炼、OpenAI、DeepSeek、NuwaAPI
+支持多个API提供商：阿里云百炼、OpenAI、DeepSeek
 """
 
 import os
@@ -23,7 +23,7 @@ class APIClient:
         初始化API客户端
         
         Args:
-            provider: API提供商 ('alibaba', 'openai', 'deepseek', 'nuwaapi')
+            provider: API提供商 ('alibaba', 'openai', 'deepseek')
             api_key: API密钥
             base_url: API基础URL（可选）
             model: 模型名称（可选）
@@ -51,11 +51,6 @@ class APIClient:
             self.model = model or "deepseek-chat"
             self._request_format = "openai"  # DeepSeek使用OpenAI兼容格式
             
-        elif self.provider == "nuwaapi":
-            self.api_key = api_key or os.getenv('NUWA_KEY')
-            self.base_url = base_url or "https://api.nuwaapi.com/v1/chat/completions"
-            self.model = model or "gpt-4o"
-            self._request_format = "openai"  # NuwaAPI使用OpenAI兼容格式
             
         else:
             raise ValueError(f"不支持的API提供商: {self.provider}")
@@ -297,13 +292,11 @@ def create_api_client(provider: str, api_key: str = None, base_url: str = None, 
 DEFAULT_MODELS = {
     'alibaba': 'qwen-plus',
     'openai': 'gpt-4o',
-    'deepseek': 'deepseek-chat',
-    'nuwaapi': 'gpt-4o'
+    'deepseek': 'deepseek-chat'
 }
 
 DEFAULT_ENV_KEYS = {
     'alibaba': 'AL_KEY',
     'openai': 'OPENAI_API_KEY',
-    'deepseek': 'DEEPSEEK_API_KEY',
-    'nuwaapi': 'NUWA_KEY'
+    'deepseek': 'DEEPSEEK_API_KEY'
 }

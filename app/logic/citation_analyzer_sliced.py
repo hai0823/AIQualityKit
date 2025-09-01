@@ -344,96 +344,30 @@ Rank: {rank}
 
         return prompt
 
-    async def _call_alibaba_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
-        """异步调用阿里云百炼API"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
 
-        data = {
-            "model": self.model,
-            "input": {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-            },
-            "parameters": {
-                "temperature": 0.1,
-                "max_tokens": 16000,
-                "top_p": 0.8,
-                "enable_thinking": False
-            },
-        }
 
-        for attempt in range(max_retries):
-            try:
-                logger.debug(f"正在调用API (尝试 {attempt + 1}/{max_retries})...")
-
-                # 检查输入长度
-                if len(prompt) > self.max_input_length:
-                    logger.warning(f"提示词长度({len(prompt)})超过限制({self.max_input_length})，进行截断")
-                    prompt = prompt[:self.max_input_length]
-                    data["input"]["messages"][0]["content"] = prompt
-
-                timeout = aiohttp.ClientTimeout(total=300)
-                async with session.post(self.base_url, headers=headers, json=data, timeout=timeout) as response:
-                    if response.status == 200:
-                        result = await response.json()
-
-                        # 统计token使用情况
-                        if 'usage' in result:
-                            usage = result['usage']
-                            input_tokens = usage.get('input_tokens', 0)
-                            output_tokens = usage.get('output_tokens', 0)
-                            total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
-
-                            self.total_input_tokens += input_tokens
-                            self.total_output_tokens += output_tokens
-                            self.total_tokens += total_tokens
-                            self.api_call_count += 1
-
-                            logger.debug(f"Token使用: 输入={input_tokens}, 输出={output_tokens}, 总计={total_tokens}")
-
-                        # 处理新的API响应格式
-                        if 'output' in result:
-                            if 'text' in result['output']:
-                                content = result['output']['text']
-                                logger.debug(f"API调用成功，响应长度: {len(content)}")
-                                return content
-                            elif 'choices' in result['output'] and len(result['output']['choices']) > 0:
-                                content = result['output']['choices'][0]['message']['content']
-                                logger.debug(f"API调用成功，响应长度: {len(content)}")
-                                return content
-                        else:
-                            logger.error(f"API响应格式异常: {result}")
-
-                    elif response.status == 429:  # 速率限制
-                        wait_time = 2 ** attempt * 2
-                        logger.warning(f"API速率限制，等待{wait_time}秒后重试")
-                        await asyncio.sleep(wait_time)
-                        continue
-
-                    else:
-                        response_text = await response.text()
-                        logger.error(f"API调用失败，状态码: {response.status}, 响应: {response_text}")
-
-            except asyncio.TimeoutError:
-                logger.warning(f"API调用超时，第{attempt + 1}次重试")
-                await asyncio.sleep(2)
-
-            except Exception as e:
-                logger.error(f"API调用异常 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-                if attempt < max_retries - 1:
-                    delay = 2 * (attempt + 1)
-                    logger.info(f"等待 {delay} 秒后重试...")
-                    await asyncio.sleep(delay)
-
-        logger.error(f"API调用失败，已达到最大重试次数 {max_retries}")
-        return None
+    async def call_api_async(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
+        """
+        异步调用API的通用方法
+        
+        Args:
+            session: aiohttp会话
+            prompt: 提示词
+            max_retries: 最大重试次数
+            
+        Returns:
+            API响应内容
+        """
+        if not self.api_key:
+            return None
+        
+        # 使用新的统一API客户端
+        result = await self.api_client.call_async(session, prompt, max_retries=max_retries)
+        if result['success']:
+            return result['content']
+        else:
+            logger.error(f"API调用失败: {result['error']}")
+            return None
 
     async def _call_openai_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Optional[str]:
         """异步调用OpenAI兼容的API（包括OpenAI和DeepSeek）"""

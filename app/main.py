@@ -9,6 +9,7 @@ import asyncio
 from .logic.citation_analyzer_fulltext import Method1BailianAnalyzer as CitationAnalyzer
 from .logic.citation_analyzer_sync import ConsistencyEvaluator as SyncAnalyzer
 from .logic.citation_analyzer_async import ConsistencyEvaluator as AsyncAnalyzer
+from .logic.internal_consistency_detector import InternalConsistencyDetector
 
 app = FastAPI()
 
@@ -17,18 +18,7 @@ app = FastAPI()
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Initialize analyzers
-# It's better to initialize them once when the app starts
-print("🚀 正在初始化分析器...")
-try:
-    citation_analyzer = CitationAnalyzer()
-    print("✅ Fulltext分析器初始化成功")
-except Exception as e:
-    print(f"❌ Fulltext分析器初始化失败：{e}")
-    import traceback
-    traceback.print_exc()
-
-print("🎯 分析器初始化完成")
+# Analyzers will be initialized at runtime with API keys
 
 # --- Pydantic Models ---
 class AnalysisRequest(BaseModel):
@@ -61,29 +51,53 @@ async def read_root():
         return HTMLResponse(content=f"<h1>错误：无法读取index.html</h1><p>{str(e)}</p>", status_code=500)
 
 @app.post("/api/analyze")
-async def analyze_text(request: AnalysisRequest):
+async def analyze_text(request: AnalysisRequest, http_request: Request):
     """
     This endpoint receives text and performs multiple analyses.
     It runs citation and consistency analysis concurrently.
     """
-    # Create concurrent tasks for each analysis
-    citation_task = citation_analyzer.analyze(
-        question=request.question,
-        answer=request.text,
-        citations_dict=request.citations
-    )
+    # 获取API配置
+    api_key = http_request.headers.get('X-API-Key')
+    api_provider = http_request.headers.get('X-API-Provider', 'alibaba')
+    api_model = http_request.headers.get('X-API-Model', '')
+    api_base_url = http_request.headers.get('X-API-Base-URL', '')
     
-    # 只运行引文分析（暂时移除一致性评估）
-    citation_results = await citation_task
+    if not api_key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少API Key，请在请求头中提供X-API-Key"}
+        )
+    
+    try:
+        # 使用运行时API Key初始化引文分析器
+        citation_analyzer = CitationAnalyzer(
+            api_key=api_key,
+            provider=api_provider,
+            model=api_model if api_model else None,
+            base_url=api_base_url if api_base_url else None
+        )
+        
+        # 运行引文分析
+        citation_results = await citation_analyzer.analyze(
+            question=request.question,
+            answer=request.text,
+            citations_dict=request.citations
+        )
 
-    # Combine results into a single response
-    return JSONResponse(content={
-        "original_text_preview": request.text[:200] + "...",
-        "citation_analysis": citation_results,
-        "consistency_evaluation": "已移除旧版sliced分析器，请使用新版evaluator",
-        # Placeholder for hallucination detection
-        "hallucination_detection": "Not implemented yet."
-    })
+        # Combine results into a single response
+        return JSONResponse(content={
+            "original_text_preview": request.text[:200] + "...",
+            "citation_analysis": citation_results,
+            "consistency_evaluation": "已移除旧版sliced分析器，请使用新版evaluator",
+            # Placeholder for hallucination detection
+            "hallucination_detection": "Not implemented yet."
+        })
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"分析失败：{str(e)}"}
+        )
 
 @app.post("/api/analyze-xlsx")
 async def analyze_xlsx_file(
@@ -159,7 +173,8 @@ async def analyze_xlsx_file(
                 analyzer = SyncAnalyzer(
                     provider=api_provider,
                     model=api_model if api_model else None,
-                    api_key=api_key
+                    api_key=api_key,
+                    base_url=api_base_url if api_base_url else None
                 )
             else:
                 # 使用异步版analyzer
@@ -167,7 +182,8 @@ async def analyze_xlsx_file(
                 analyzer = AsyncAnalyzer(
                     provider=api_provider,
                     model=api_model if api_model else None,
-                    api_key=api_key
+                    api_key=api_key,
+                    base_url=api_base_url if api_base_url else None
                 )
             
             # 创建临时文件进行分析
@@ -381,7 +397,12 @@ async def analyze_xlsx_file(
                     pass
         else:
             # 使用fulltext版本分析器（默认）
-            citation_analyzer.api_key = api_key  # 设置API Key
+            citation_analyzer = CitationAnalyzer(
+                api_key=api_key,
+                provider=api_provider,
+                model=api_model if api_model else None,
+                base_url=api_base_url if api_base_url else None
+            )
             
             # 直接调用脚本方法并从保存的文件读取结果
             import tempfile
@@ -540,4 +561,147 @@ async def analyze_xlsx_file(
         return JSONResponse(
             status_code=500,
             content={"error": f"处理文件时发生错误：{str(e)}"}
+        )
+
+@app.post("/api/analyze-internal-consistency")
+async def analyze_internal_consistency(
+    request: Request,
+    file: UploadFile = File(...)
+):
+    """
+    上传xlsx文件进行内部一致性检测（新版幻觉检测）
+    不依赖引文，检测答案自身的逻辑一致性
+    """
+    print("🔍 内部一致性检测API被调用！")
+    
+    # 获取API配置
+    api_key = request.headers.get('X-API-Key')
+    api_provider = request.headers.get('X-API-Provider', 'deepseek')
+    api_model = request.headers.get('X-API-Model', '')
+    api_base_url = request.headers.get('X-API-Base-URL', '')
+    
+    print(f"🔑 API配置: 密钥={'已设置' if api_key else '未设置'}, 提供商={api_provider}, 模型={api_model or '默认'}")
+    
+    if not api_key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少API Key"}
+        )
+    
+    # 检查文件类型
+    if not file.filename.endswith('.xlsx'):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "只支持xlsx格式文件"}
+        )
+    
+    try:
+        print("🔍 开始内部一致性检测...")
+        
+        # 读取文件内容
+        file_content = await file.read()
+        print(f"📁 文件读取完成，大小：{len(file_content)} bytes")
+        
+        # 获取分析选项
+        analysis_mode = request.headers.get('X-Analysis-Mode', 'all')
+        num_samples = request.headers.get('X-Num-Samples')
+        specific_rank = request.headers.get('X-Specific-Rank')
+        start_from = request.headers.get('X-Start-From')
+        concurrent_limit = request.headers.get('X-Concurrent-Limit', '10')
+        
+        print(f"⚙️ 分析选项：mode={analysis_mode}, samples={num_samples}, rank={specific_rank}, start={start_from}, concurrent={concurrent_limit}")
+        
+        # 转换数值参数
+        try:
+            if num_samples:
+                num_samples = int(num_samples)
+            if specific_rank:
+                specific_rank = int(specific_rank)
+            if start_from:
+                start_from = int(start_from)
+            concurrent_limit = int(concurrent_limit)
+        except ValueError:
+            print("❌ 参数格式错误")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "分析参数格式错误"}
+            )
+        
+        # 创建内部一致性检测器
+        print(f"🔄 初始化内部一致性检测器...")
+        detector = InternalConsistencyDetector(
+            provider=api_provider,
+            api_key=api_key,
+            base_url=api_base_url if api_base_url else None,
+            model=api_model if api_model else None,
+            concurrent_limit=concurrent_limit
+        )
+        
+        # 执行分析
+        print(f"🔄 开始内部一致性检测...")
+        import datetime
+        analysis_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        results = await detector.batch_analyze_excel(
+            file_content=file_content,
+            num_samples=num_samples,
+            specific_rank=specific_rank,
+            start_from=start_from
+        )
+        
+        print(f"✅ 内部一致性检测完成，获得{len(results)}条结果")
+        
+        # 生成摘要
+        summary = detector.generate_summary(results)
+        print(f"📊 分析摘要：成功{summary['success_count']}条，问题{summary['problem_count']}条")
+        
+        # 保存结果到项目目录
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(
+            os.path.dirname(__file__), "..", "data", "output", "results",
+            f"internal_consistency_{analysis_mode}_{timestamp}.json"
+        )
+        
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        detector.save_results(results, output_path)
+        print(f"✅ 结果已保存到：{output_path}")
+        
+        # 构建响应数据
+        response_data = {
+            "filename": file.filename,
+            "analysis_type": "internal_consistency",
+            "analysis_mode": analysis_mode,
+            "provider": api_provider,
+            "model": api_model or "default",
+            "analysis_time": analysis_time,
+            "total_count": summary['total_count'],
+            "success_count": summary['success_count'],
+            "failed_count": summary['failed_count'],
+            "problem_count": summary['problem_count'],
+            "no_problem_count": summary['no_problem_count'],
+            "problem_rate": round(summary['problem_rate'], 3),
+            "status_distribution": summary['status_distribution'],
+            "analysis_summary": summary['analysis_summary'],
+            "results": results[:10] if len(results) > 10 else results,  # 只返回前10条详细结果
+            "full_results_available": len(results) > 10,
+            "output_file_saved": output_path,
+            "message": f"内部一致性检测完成，发现{summary['problem_count']}个问题"
+        }
+        
+        return JSONResponse(content=response_data)
+        
+    except ValueError as e:
+        print(f"❌ 参数错误：{str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(e)}
+        )
+    except Exception as e:
+        print(f"❌ 内部一致性检测失败：{str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"内部一致性检测失败：{str(e)}"}
         )
