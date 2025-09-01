@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 
 class ConsistencyEvaluator:
     def __init__(self, provider: str = "alibaba", model: str = None, api_key: str = None,
-                 rank_start: int = 1, rank_end: int = 50, concurrent_limit: int = 10):
+                 base_url: str = None, rank_start: int = 1, rank_end: int = 50, concurrent_limit: int = 10):
         # 使用统一的API客户端
-        self.api_client = create_api_client(provider, api_key, None, model)
+        self.api_client = create_api_client(provider, api_key, base_url, model)
         self.provider = provider
         self.max_input_length = 128000  # 128k字符限制
         self.concurrent_limit = concurrent_limit

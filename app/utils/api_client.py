@@ -126,6 +126,16 @@ class APIClient:
 
         headers = self._build_headers()
         data = self._build_request_data(prompt, temperature, max_tokens)
+        
+        # 调试日志：打印请求数据
+        print(f"API请求数据调试:")
+        print(f"  Provider: {self.provider}")
+        print(f"  Base URL: {self.base_url}")
+        print(f"  Model: {self.model}")
+        print(f"  Prompt长度: {len(prompt)}字符")
+        print(f"  Prompt前100字符: {prompt[:100]}")
+        print(f"  Request Data: {json.dumps(data, ensure_ascii=False, indent=2)}")
+        print(f"  Headers: {headers}")
 
         prompt_tokens = self.count_chars(prompt)
 
@@ -136,6 +146,12 @@ class APIClient:
                 if attempt > 0:
                     print(f"    第{attempt + 1}次重试...")
 
+                # 验证关键数据
+                print(f"  准备发送请求:")
+                print(f"    prompt是否为空: {not prompt or prompt.strip() == ''}")
+                print(f"    data['messages'][0]['content']长度: {len(data['messages'][0]['content'])}")
+                print(f"    实际JSON: {json.dumps(data, ensure_ascii=False)[:200]}...")
+                
                 response = requests.post(self.base_url, headers=headers, json=data, timeout=180)
 
                 if response.status_code == 200:
@@ -160,7 +176,12 @@ class APIClient:
                         continue
 
                 elif response.status_code >= 500:
-                    last_error = f'服务器错误: {response.status_code}'
+                    try:
+                        error_response = response.text
+                        print(f"500错误详情: {error_response}")
+                        last_error = f'服务器错误: {response.status_code} - {error_response[:200]}'
+                    except:
+                        last_error = f'服务器错误: {response.status_code}'
                     if attempt < max_retries - 1:
                         time.sleep(10)
                         continue
@@ -213,6 +234,16 @@ class APIClient:
 
         headers = self._build_headers()
         data = self._build_request_data(prompt, temperature, max_tokens)
+        
+        # 调试日志：打印请求数据
+        print(f"[异步API调用] API请求数据调试:")
+        print(f"  Provider: {self.provider}")
+        print(f"  Base URL: {self.base_url}")
+        print(f"  Model: {self.model}")
+        print(f"  Prompt长度: {len(prompt)}字符")
+        print(f"  Prompt前100字符: {prompt[:100]}")
+        print(f"  Request Data: {json.dumps(data, ensure_ascii=False, indent=2)}")
+        print(f"  Headers: {headers}")
 
         # 重试循环
         last_error = None
@@ -242,7 +273,8 @@ class APIClient:
 
                     elif response.status >= 500:
                         response_text = await response.text()
-                        last_error = f'服务器错误: {response.status}'
+                        print(f"500错误详情: {response_text}")
+                        last_error = f'服务器错误: {response.status} - {response_text[:200]}'
                         if attempt < max_retries - 1:
                             await asyncio.sleep(10)
                             continue
