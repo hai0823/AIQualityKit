@@ -476,9 +476,53 @@ function showResults(results) {
                     formattedOutput += `使用的引用: [${result.citations_used.join(', ')}]\n`;
                 }
                 // 显示分析结果 (支持不同分析器格式)
-                if (result.analysis) {
+                // 处理引文分析结果
+                if (result.citation_analysis && Array.isArray(result.citation_analysis)) {
+                    // 使用新的数据结构
+                    if (result.analysis_summary) {
+                        formattedOutput += `🔍 ${result.analysis_summary}\n`;
+                    }
+                    
+                    if (result.citation_analysis.length > 0) {
+                        result.citation_analysis.forEach((item, i) => {
+                            const consistency = item.consistency === "一致" ? "✅" : "❌";
+                            const citations = item.citation_numbers ? `[${item.citation_numbers.join(',')}]` : "[]";
+                            formattedOutput += `  ${i + 1}. ${consistency} ${item.consistency} ${citations}\n`;
+                            formattedOutput += `     观点: ${item.topic}\n`;
+                            if (item.reason) {
+                                formattedOutput += `     分析: ${item.reason}\n`;
+                            }
+                            formattedOutput += `\n`;
+                        });
+                    }
+                } else if (result.raw_response) {
+                    // 兼容旧格式：尝试解析raw_response
+                    try {
+                        const citationAnalysis = JSON.parse(result.raw_response);
+                        if (Array.isArray(citationAnalysis) && citationAnalysis.length > 0) {
+                            formattedOutput += `🔍 引文分析结果: 发现${citationAnalysis.length}个带引用标记的句子\n`;
+                            citationAnalysis.forEach((item, i) => {
+                                const consistency = item.consistency === "一致" ? "✅" : "❌";
+                                const citations = item.citation_numbers ? `[${item.citation_numbers.join(',')}]` : "[]";
+                                formattedOutput += `  ${i + 1}. ${consistency} ${item.consistency} ${citations}\n`;
+                                formattedOutput += `     观点: ${item.topic}\n`;
+                                if (item.reason) {
+                                    formattedOutput += `     分析: ${item.reason}\n`;
+                                }
+                                formattedOutput += `\n`;
+                            });
+                        } else {
+                            formattedOutput += `🔍 引文分析: 未发现带引用标记的句子\n`;
+                        }
+                    } catch (e) {
+                        // 如果不是JSON格式，显示原始文本
+                        formattedOutput += `🔍 分析结果:\n${result.raw_response}\n`;
+                    }
+                }
+                
+                // 备用显示逻辑（兼容旧格式）
+                if (result.analysis && !result.raw_response) {
                     if (typeof result.analysis === 'string') {
-                        // 处理JSON字符串中的换行符
                         let analysisText = result.analysis;
                         if (analysisText.includes('\\n')) {
                             analysisText = analysisText.replace(/\\n/g, '\n');
@@ -488,7 +532,6 @@ function showResults(results) {
                         formattedOutput += `分析结果: 发现${result.analysis.length}个引用分析项\n`;
                         result.analysis.forEach((item, i) => {
                             let itemText = item.topic || item.content || JSON.stringify(item);
-                            // 处理换行符
                             if (itemText.includes('\\n')) {
                                 itemText = itemText.replace(/\\n/g, '\n');
                             }
@@ -497,7 +540,7 @@ function showResults(results) {
                     }
                 }
                 
-                // 显示fulltext分析器的内部一致性检测结果
+                // 显示内部一致性检测结果（如果有的话）
                 if (result.status) {
                     formattedOutput += `🔍 检测状态: ${result.status}\n`;
                 }

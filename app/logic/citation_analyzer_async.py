@@ -36,12 +36,16 @@ logger = logging.getLogger(__name__)
 
 class ConsistencyEvaluator:
     def __init__(self, provider: str = "alibaba", model: str = None, api_key: str = None,
-                 rank_start: int = 1, rank_end: int = 50, concurrent_limit: int = 10):
+                 base_url: str = None, rank_start: int = 1, rank_end: int = 50, concurrent_limit: int = 10):
         # 使用统一的API客户端
-        self.api_client = create_api_client(provider, api_key, None, model)
+        self.api_client = create_api_client(provider, api_key, base_url, model)
         self.provider = provider
         self.max_input_length = 128000  # 128k字符限制
         self.concurrent_limit = concurrent_limit
+        
+        # 保存rank范围作为实例属性
+        self.rank_start = rank_start
+        self.rank_end = rank_end
 
         # 创建checkpoints目录（如果不存在）
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -638,19 +642,85 @@ Rank: {rank}
             logger.info(f"检查点已保存，已处理{len(processed_ranks)}个rank")
         except Exception as e:
             logger.error(f"保存检查点失败: {e}")
+        
+        # 清理旧的检查点文件
+        self._cleanup_old_checkpoints()
+
+    def _cleanup_old_checkpoints(self, keep_count: int = 3):
+        """
+        清理旧的检查点文件，只保留最新的几个
+        
+        Args:
+            keep_count: 保留的检查点文件数量
+        """
+        try:
+            checkpoint_pattern = f"{self.provider}_evaluation_checkpoint_rank{self.rank_start}-{self.rank_end}_"
+            
+            # 搜索匹配的检查点文件
+            matching_files = []
+            for filename in os.listdir(self.checkpoint_dir):
+                if filename.startswith(checkpoint_pattern) and filename.endswith('.json'):
+                    full_path = os.path.join(self.checkpoint_dir, filename)
+                    matching_files.append((full_path, os.path.getmtime(full_path)))
+            
+            # 如果文件数量超过保留数量，删除旧文件
+            if len(matching_files) > keep_count:
+                # 按修改时间排序，最新的在前
+                matching_files.sort(key=lambda x: x[1], reverse=True)
+                
+                # 删除多余的旧文件
+                files_to_delete = matching_files[keep_count:]
+                for file_path, _ in files_to_delete:
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"删除旧检查点文件: {os.path.basename(file_path)}")
+                    except Exception as e:
+                        logger.warning(f"删除检查点文件失败 {file_path}: {e}")
+                        
+        except Exception as e:
+            logger.warning(f"清理检查点文件时出错: {e}")
 
     def load_checkpoint(self) -> Tuple[List[int], List[Dict[str, Any]]]:
         """
         加载中间结果检查点
+        支持智能搜索匹配的检查点文件，解决时间戳不一致问题
 
         Returns:
             (已处理的rank列表, 所有结果)
         """
-        if not os.path.exists(self.checkpoint_file):
+        checkpoint_file_to_load = None
+        
+        # 首先尝试精确匹配
+        if os.path.exists(self.checkpoint_file):
+            checkpoint_file_to_load = self.checkpoint_file
+        else:
+            # 智能搜索匹配的检查点文件
+            checkpoint_pattern = f"{self.provider}_evaluation_checkpoint_rank{self.rank_start}-{self.rank_end}_"
+            
+            try:
+                # 搜索匹配的检查点文件
+                matching_files = []
+                for filename in os.listdir(self.checkpoint_dir):
+                    if filename.startswith(checkpoint_pattern) and filename.endswith('.json'):
+                        full_path = os.path.join(self.checkpoint_dir, filename)
+                        matching_files.append((full_path, os.path.getmtime(full_path)))
+                
+                if matching_files:
+                    # 按修改时间排序，选择最新的检查点文件
+                    matching_files.sort(key=lambda x: x[1], reverse=True)
+                    checkpoint_file_to_load = matching_files[0][0]
+                    logger.info(f"找到匹配的检查点文件: {os.path.basename(checkpoint_file_to_load)}")
+                    
+            except Exception as e:
+                logger.warning(f"搜索检查点文件时出错: {e}")
+        
+        # 如果没有找到任何检查点文件
+        if not checkpoint_file_to_load:
+            logger.info("未找到匹配的检查点文件，从头开始处理")
             return [], []
 
         try:
-            with open(self.checkpoint_file, 'r', encoding='utf-8') as f:
+            with open(checkpoint_file_to_load, 'r', encoding='utf-8') as f:
                 checkpoint_data = json.load(f)
 
             processed_ranks = checkpoint_data.get('processed_ranks', [])
@@ -703,23 +773,31 @@ Rank: {rank}
                 else:
                     inconsistent_results.append(result)
 
+            # 导入排序功能
+            from .json_rank_sorter import sort_by_rank
+            
+            # 对结果进行排序
+            sorted_all_results = sort_by_rank(all_results)
+            sorted_consistent_results = sort_by_rank(consistent_results)
+            sorted_inconsistent_results = sort_by_rank(inconsistent_results)
+            
             # 保存所有结果
             all_results_file = os.path.join(output_dir, "qwen_all_results_async.json")
             with open(all_results_file, 'w', encoding='utf-8') as f:
-                json.dump(all_results, f, ensure_ascii=False, indent=2)
-            logger.info(f"所有结果已保存到: {all_results_file}")
+                json.dump(sorted_all_results, f, ensure_ascii=False, indent=2)
+            logger.info(f"所有结果已保存到: {all_results_file}（已按rank排序）")
 
             # 保存一致结果
             consistent_file = os.path.join(output_dir, "qwen_consistency_results_async.json")
             with open(consistent_file, 'w', encoding='utf-8') as f:
-                json.dump(consistent_results, f, ensure_ascii=False, indent=2)
-            logger.info(f"一致结果已保存到: {consistent_file}")
+                json.dump(sorted_consistent_results, f, ensure_ascii=False, indent=2)
+            logger.info(f"一致结果已保存到: {consistent_file}（已按rank排序）")
 
             # 保存不一致结果
             inconsistent_file = os.path.join(output_dir, "qwen_inconsistency_results_async.json")
             with open(inconsistent_file, 'w', encoding='utf-8') as f:
-                json.dump(inconsistent_results, f, ensure_ascii=False, indent=2)
-            logger.info(f"不一致结果已保存到: {inconsistent_file}")
+                json.dump(sorted_inconsistent_results, f, ensure_ascii=False, indent=2)
+            logger.info(f"不一致结果已保存到: {inconsistent_file}（已按rank排序）")
 
             logger.info(
                 f"结果统计: 总计{len(all_results)}条，一致{len(consistent_results)}条，不一致{len(inconsistent_results)}条")

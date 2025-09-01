@@ -121,67 +121,120 @@ class Method1BailianAnalyzer:
             
         return clean_answer
 
+    def _extract_json_from_response(self, response: str) -> str:
+        """
+        从API响应中提取JSON内容，处理markdown代码块
+        
+        Args:
+            response: API响应文本
+            
+        Returns:
+            提取的JSON字符串
+        """
+        import re
+        
+        # 尝试提取markdown代码块中的JSON (更宽泛的匹配)
+        json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+        if json_match:
+            return json_match.group(1).strip()
+        
+        # 尝试提取一般代码块中的JSON  
+        code_match = re.search(r'```\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            content = code_match.group(1).strip()
+            # 检查是否看起来像JSON
+            if content.startswith('[') or content.startswith('{'):
+                return content
+        
+        # 如果没有代码块，尝试寻找JSON格式内容
+        # 寻找以[或{开头的JSON内容
+        json_pattern = r'(\[.*?\]|\{.*?\})'
+        json_content_match = re.search(json_pattern, response, re.DOTALL)
+        if json_content_match:
+            return json_content_match.group(1).strip()
+        
+        # 如果都没有找到，直接返回原始响应
+        return response.strip()
+
     def prepare_analysis_prompt(self, question: str, answer: str, citations_dict: Dict[int, str]) -> str:
-        """准备内部一致性分析prompt（不依赖引文）"""
-        # 清理答案，移除思考过程
-        clean_answer = self.extract_clean_answer(answer)
+        """准备分析prompt（完整版本，不截断）"""
+        used_citations = self.extract_citations(answer)
+        
+        prompt_start = f"""你是一个专业的引文质量分析专家。请仔细分析AI回答中引用标记的使用是否准确。
 
-        prompt_start = f"""你是一个专业的逻辑一致性检测专家。
+**核心任务**：检查回答中每个带有引用标记[citation:x]的观点/句子，判断其描述是否与对应的引文内容一致。
 
-【核心任务】
-检测AI回答是否存在内部逻辑矛盾、事实冲突或基础错误。
-**重要：完全不考虑外部引文或参考资料，只检查答案自身的内部一致性。**
+**重要规则（必须严格遵守）**：
+- **引用边界识别**：引用标记[citation:x]的作用范围严格以句号（。）、换行符、段落分隔符为边界，绝对不能跨越这些边界
+- **逐句独立分析**：必须将文本按句号（。）拆分为独立句子，每个句子单独判断是否包含引用标记
+- **无引用标记=跳过**：如果一个句子内部没有[citation:x]标记，无论其前后句子是否有引用，都必须完全跳过该句子
+- **严禁跨句关联**：绝对不能将前一句子的引用标记应用到后续没有引用标记的句子上
 
-【检测类型】
-1. 无问题：答案逻辑清晰，前后一致，无明显错误
-2. 前后矛盾：答案内部提到的同一事实或观点前后不一致
-3. 逻辑错误：推理链条有漏洞，结论与前提不符，逻辑跳跃
-4. 基础错误：简单的数学计算错误、常识性错误、明显的事实性错误
-5. 自相矛盾：答案内部观点或立场相互冲突
+请遵循以下步骤和规则：
 
-【重点关注】
-- 数字比较错误（如"11.9大于13"）
-- 时间逻辑错误（如"2020年比2023年晚"）
-- 因果关系混乱
-- 同一概念的不同定义或描述
-- 计算过程与结果不符
-- 违反基本常识的表述
+1. **逐句拆分**：将【完整答案内容】拆分为独立的观点或句子，在思考过程和回答内容两部分中都要查找。
+2. **逐句分析**：对于每一个独立的观点或句子：
+   a. **首先检查**：该句子是否包含引用标记 `[citation:x]`。如果没有任何引用标记，立即跳过该句子。
+   b. **如果有引用标记**：提取引用编号，查找对应引文内容，判断一致性。
 
 【问题】
 {question}
 
-【AI回答（已清理思考过程）】
-{clean_answer}
+【完整答案内容】
+{answer}"""
 
-请严格按照以下格式检测这个回答的内部一致性："""
+        # 构建引文信息
+        citations_text = "\n\n【可用引文】\n"
+        if citations_dict:
+            for cite_num in sorted(citations_dict.keys()):
+                citations_text += f"[citation:{cite_num}]: {citations_dict[cite_num]}\n"
+        else:
+            citations_text += "无可用引文\n"
 
-        citations_text = ""
+        analysis_requirements = f'''
+3. **输出要求**：
+   - 输出一个严格的JSON格式的列表 `[]`。
+   - 列表中的每个对象代表对一个观点/句子的分析，格式如下：
+     ```json
+     {{
+       "topic": "被分析的句子或观点",
+       "citation_numbers": [引用的编号列表],
+       "consistency": "一致" 或 "不一致",
+       "reason": "详细的判断理由。如果一致，请说明证据在哪。如果不一致，请明确指出是哪个信息点在引文中无法找到或存在矛盾。"
+     }}
+     ```
 
-        analysis_requirements = '''【输出格式要求】
-状态：[无问题/前后矛盾/逻辑错误/基础错误/自相矛盾]
-问题描述：[具体指出存在的问题，如果无问题则说明检查要点]
-具体位置：[指出问题出现的具体位置或句子]
+4. **空引用情况（绝对重要）**：
+   - **完全跳过规则**：如果一个句子没有[citation:x]标记，绝对不能出现在JSON输出中，连提及都不行
+   - **错误做法1**（绝对禁止）：
+     ```json
+     {{
+       "topic": "火焰山的最佳游览时间是清晨7:00-9:00...",
+       "citation_numbers": [],
+       "consistency": "一致",
+       "reason": "该句无引用标记，根据规则应跳过..."
+     }}
+     ```
+   - **错误做法2**（绝对禁止）：
+     ```json
+     {{
+       "topic": "优化句关联。
 
-**检测示例**：
+**示例输出**：
+     ```json
+     [
+       {{
+         "topic": "根据[citation:6][citation:7][citation:8]，吐鲁番的最佳旅游时间是4-5月和9-10月，气温适宜",
+         "citation_numbers": [6, 7, 8],
+         "consistency": "一致",
+         "reason": "引文6、7、8均支持该时间段和气温描述"
+       }}
+     ]
+     ```
 
-状态：基础错误
-问题描述：数字比较错误，"11.9大于13"违反基本数学常识
-具体位置：第二段中"经过计算发现11.9大于13"
-
-状态：前后矛盾  
-问题描述：同一概念的描述前后不一致，先说"A是B的主要原因"，后说"A对B没有影响"
-具体位置：第一段vs第三段
-
-状态：无问题
-问题描述：答案逻辑清晰，数据准确，前后一致，无明显错误
-具体位置：全文检查未发现问题
-
-**重要提醒**：
-- 只检查答案内部的逻辑一致性
-- 不考虑任何外部引文或参考资料
-- 重点关注低级错误（数学、常识、逻辑）
-- 严格按照格式输出'''
-
+注意：上例中"火焰山..."句子完全不出现在输出中，因为它没有引用标记。
+'''
+        
         return prompt_start + citations_text + analysis_requirements
 
     async def _call_alibaba_api(self, session: aiohttp.ClientSession, prompt: str, max_retries: int = 3) -> Dict[str, Any]:
@@ -301,6 +354,13 @@ class Method1BailianAnalyzer:
             'temperature': 0.2,
             'max_tokens': 15000
         }
+        
+        # 调试日志：打印请求数据
+        print(f"[OpenAI API调试] 请求详情:")
+        print(f"  URL: {self.api_ep}")
+        print(f"  Model: {self.model}")
+        print(f"  Provider: {self.provider}")
+        print(f"  Request Data: {json.dumps(data, ensure_ascii=False, indent=2)}")
 
         # 重试循环
         last_error = None
@@ -630,8 +690,21 @@ class Method1BailianAnalyzer:
                 'skipped': True
             }
 
-        # 生成内部一致性检测prompt（不传递引文字典）
-        analysis_prompt = self.prepare_analysis_prompt(question, answer, {})
+        # 提取答案中的引用标记
+        used_citations = self.extract_citations(clean_answer)
+        
+        # 构建引文字典（从Excel行数据中提取）
+        citations_dict = {}
+        if used_citations:
+            for cite_num in used_citations:
+                col_name = f"引文{cite_num}"
+                if col_name in row.index:
+                    citation_content = str(row[col_name]) if not pd.isna(row[col_name]) else ""
+                    if citation_content and citation_content != "nan":
+                        citations_dict[cite_num] = citation_content
+        
+        # 生成引文分析prompt（传递引文字典）
+        analysis_prompt = self.prepare_analysis_prompt(question, answer, citations_dict)
 
         # 调用API分析
         api_result = self.call_api(analysis_prompt)
@@ -740,24 +813,53 @@ class Method1BailianAnalyzer:
                 'skipped': True
             }
 
-        # 生成内部一致性检测prompt（不传递引文字典）
-        analysis_prompt = self.prepare_analysis_prompt(question, answer, {})
+        # 提取答案中的引用标记
+        used_citations = self.extract_citations(clean_answer)
+        
+        # 构建引文字典（从Excel行数据中提取）
+        citations_dict = {}
+        if used_citations:
+            for cite_num in used_citations:
+                col_name = f"引文{cite_num}"
+                if col_name in row.index:
+                    citation_content = str(row[col_name]) if not pd.isna(row[col_name]) else ""
+                    if citation_content and citation_content != "nan":
+                        citations_dict[cite_num] = citation_content
+        
+        # 生成引文分析prompt（传递引文字典）
+        analysis_prompt = self.prepare_analysis_prompt(question, answer, citations_dict)
+        
+        # 调试：检查prompt内容
+        print(f"[DEBUG] 准备调用API分析第{rank}条数据")
+        print(f"[DEBUG] Prompt长度: {len(analysis_prompt)}字符")
+        print(f"[DEBUG] Prompt前200字符: {analysis_prompt[:200]}")
+        print(f"[DEBUG] Provider: {self.provider}")
 
         # 调用异步API分析
         api_result = await self.call_api_async(session, analysis_prompt)
 
-        # 解析响应结果
-        status = "无问题"
-        description = "答案逻辑一致，无明显问题"
-        location = ""
-        
+        # 构建引文分析结果
         if api_result['success']:
             try:
                 content = api_result['content'].strip()
-                # 解析内部一致性检测结果
-                status, description, location = self._parse_consistency_result(content)
-            except Exception as e:
-                description = f"解析异常: {str(e)}"
+                # 提取markdown代码块中的JSON内容
+                json_content = self._extract_json_from_response(content)
+                # 尝试解析JSON格式的引文分析结果
+                citation_analysis = json.loads(json_content)
+                if isinstance(citation_analysis, list):
+                    # 统计一致性情况
+                    consistent_count = sum(1 for item in citation_analysis if item.get('consistency') == '一致')
+                    total_count = len(citation_analysis)
+                    
+                    analysis_summary = f"发现{total_count}个带引用标记的句子，{consistent_count}个一致，{total_count - consistent_count}个不一致"
+                else:
+                    analysis_summary = "引文分析结果格式异常"
+            except (json.JSONDecodeError, Exception) as e:
+                citation_analysis = []
+                analysis_summary = f"JSON解析失败: {str(e)}"
+        else:
+            citation_analysis = []
+            analysis_summary = "API调用失败"
 
         result = {
             'rank': rank,
@@ -767,9 +869,8 @@ class Method1BailianAnalyzer:
             'clean_answer_length': len(clean_answer),
             'api_success': api_result['success'],
             'api_error': api_result['error'],
-            'status': status,
-            'description': description,
-            'location': location,
+            'analysis_summary': analysis_summary,
+            'citation_analysis': citation_analysis,
             'raw_response': api_result['content'] if api_result['success'] else None,
             'skipped': False
         }
@@ -963,10 +1064,14 @@ class Method1BailianAnalyzer:
                 os.makedirs(output_dir)
                 print(f"创建输出目录：{output_dir}")
 
+            # 导入排序功能并对结果排序
+            from .json_rank_sorter import sort_by_rank
+            sorted_results = sort_by_rank(results)
+            
             # 保存结果
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
-            print(f"✓ 结果已成功保存到：{output_path}")
+                json.dump(sorted_results, f, ensure_ascii=False, indent=2)
+            print(f"✓ 结果已成功保存到：{output_path}（已按rank排序）")
             print(f"    文件大小：{os.path.getsize(output_path)} 字节")
 
         except PermissionError:
