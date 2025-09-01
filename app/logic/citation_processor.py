@@ -125,9 +125,13 @@ def save_results_to_json(results: List[Dict[str, Any]], output_file: str = 'cita
         output_file: 输出文件名
     """
     try:
+        # 导入排序功能并对结果排序
+        from .json_rank_sorter import sort_by_rank
+        sorted_results = sort_by_rank(results)
+        
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"结果已保存到: {output_file}")
+            json.dump(sorted_results, f, ensure_ascii=False, indent=2)
+        print(f"结果已保存到: {output_file}（已按rank排序）")
     except Exception as e:
         print(f"保存文件时出错: {e}")
 

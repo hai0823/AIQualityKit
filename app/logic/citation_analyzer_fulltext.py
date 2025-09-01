@@ -963,10 +963,14 @@ class Method1BailianAnalyzer:
                 os.makedirs(output_dir)
                 print(f"创建输出目录：{output_dir}")
 
+            # 导入排序功能并对结果排序
+            from .json_rank_sorter import sort_by_rank
+            sorted_results = sort_by_rank(results)
+            
             # 保存结果
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
-            print(f"✓ 结果已成功保存到：{output_path}")
+                json.dump(sorted_results, f, ensure_ascii=False, indent=2)
+            print(f"✓ 结果已成功保存到：{output_path}（已按rank排序）")
             print(f"    文件大小：{os.path.getsize(output_path)} 字节")
 
         except PermissionError:

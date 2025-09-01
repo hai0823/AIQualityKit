@@ -337,10 +337,14 @@ class InternalConsistencyDetector:
             import os
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
+            # 导入排序功能并对结果排序
+            from .json_rank_sorter import sort_by_rank
+            sorted_results = sort_by_rank(results)
             
-            print(f"✅ 内部一致性检测结果已保存到: {output_path}")
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(sorted_results, f, ensure_ascii=False, indent=2)
+            
+            print(f"✅ 内部一致性检测结果已保存到: {output_path}（已按rank排序）")
             
         except Exception as e:
             print(f"❌ 保存结果失败: {str(e)}")
