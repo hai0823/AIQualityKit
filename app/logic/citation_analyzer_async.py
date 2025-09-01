@@ -42,6 +42,10 @@ class ConsistencyEvaluator:
         self.provider = provider
         self.max_input_length = 128000  # 128k字符限制
         self.concurrent_limit = concurrent_limit
+        
+        # 保存rank范围作为实例属性
+        self.rank_start = rank_start
+        self.rank_end = rank_end
 
         # 创建checkpoints目录（如果不存在）
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
