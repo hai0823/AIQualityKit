@@ -18,18 +18,7 @@ app = FastAPI()
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Initialize analyzers
-# It's better to initialize them once when the app starts
-print("🚀 正在初始化分析器...")
-try:
-    citation_analyzer = CitationAnalyzer()
-    print("✅ Fulltext分析器初始化成功")
-except Exception as e:
-    print(f"❌ Fulltext分析器初始化失败：{e}")
-    import traceback
-    traceback.print_exc()
-
-print("🎯 分析器初始化完成")
+# Analyzers will be initialized at runtime with API keys
 
 # --- Pydantic Models ---
 class AnalysisRequest(BaseModel):
@@ -62,29 +51,53 @@ async def read_root():
         return HTMLResponse(content=f"<h1>错误：无法读取index.html</h1><p>{str(e)}</p>", status_code=500)
 
 @app.post("/api/analyze")
-async def analyze_text(request: AnalysisRequest):
+async def analyze_text(request: AnalysisRequest, http_request: Request):
     """
     This endpoint receives text and performs multiple analyses.
     It runs citation and consistency analysis concurrently.
     """
-    # Create concurrent tasks for each analysis
-    citation_task = citation_analyzer.analyze(
-        question=request.question,
-        answer=request.text,
-        citations_dict=request.citations
-    )
+    # 获取API配置
+    api_key = http_request.headers.get('X-API-Key')
+    api_provider = http_request.headers.get('X-API-Provider', 'alibaba')
+    api_model = http_request.headers.get('X-API-Model', '')
+    api_base_url = http_request.headers.get('X-API-Base-URL', '')
     
-    # 只运行引文分析（暂时移除一致性评估）
-    citation_results = await citation_task
+    if not api_key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少API Key，请在请求头中提供X-API-Key"}
+        )
+    
+    try:
+        # 使用运行时API Key初始化引文分析器
+        citation_analyzer = CitationAnalyzer(
+            api_key=api_key,
+            provider=api_provider,
+            model=api_model if api_model else None,
+            base_url=api_base_url if api_base_url else None
+        )
+        
+        # 运行引文分析
+        citation_results = await citation_analyzer.analyze(
+            question=request.question,
+            answer=request.text,
+            citations_dict=request.citations
+        )
 
-    # Combine results into a single response
-    return JSONResponse(content={
-        "original_text_preview": request.text[:200] + "...",
-        "citation_analysis": citation_results,
-        "consistency_evaluation": "已移除旧版sliced分析器，请使用新版evaluator",
-        # Placeholder for hallucination detection
-        "hallucination_detection": "Not implemented yet."
-    })
+        # Combine results into a single response
+        return JSONResponse(content={
+            "original_text_preview": request.text[:200] + "...",
+            "citation_analysis": citation_results,
+            "consistency_evaluation": "已移除旧版sliced分析器，请使用新版evaluator",
+            # Placeholder for hallucination detection
+            "hallucination_detection": "Not implemented yet."
+        })
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"分析失败：{str(e)}"}
+        )
 
 @app.post("/api/analyze-xlsx")
 async def analyze_xlsx_file(
@@ -384,7 +397,12 @@ async def analyze_xlsx_file(
                     pass
         else:
             # 使用fulltext版本分析器（默认）
-            citation_analyzer.api_key = api_key  # 设置API Key
+            citation_analyzer = CitationAnalyzer(
+                api_key=api_key,
+                provider=api_provider,
+                model=api_model if api_model else None,
+                base_url=api_base_url if api_base_url else None
+            )
             
             # 直接调用脚本方法并从保存的文件读取结果
             import tempfile
