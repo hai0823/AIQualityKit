@@ -475,6 +475,7 @@ function showResults(results) {
                 if (result.citations_used) {
                     formattedOutput += `使用的引用: [${result.citations_used.join(', ')}]\n`;
                 }
+                // 显示分析结果 (支持不同分析器格式)
                 if (result.analysis) {
                     if (typeof result.analysis === 'string') {
                         // 处理JSON字符串中的换行符
@@ -494,6 +495,17 @@ function showResults(results) {
                             formattedOutput += `  ${i + 1}. ${itemText}\n`;
                         });
                     }
+                }
+                
+                // 显示fulltext分析器的内部一致性检测结果
+                if (result.status) {
+                    formattedOutput += `🔍 检测状态: ${result.status}\n`;
+                }
+                if (result.description) {
+                    formattedOutput += `📝 问题描述: ${result.description}\n`;
+                }
+                if (result.location) {
+                    formattedOutput += `📍 具体位置: ${result.location}\n`;
                 }
             } else {
                 formattedOutput += `状态: ✗ 失败\n`;

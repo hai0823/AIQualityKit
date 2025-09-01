@@ -83,128 +83,104 @@ class Method1BailianAnalyzer:
             citations.append(int(match))
         return sorted(list(set(citations)))
 
+    def extract_clean_answer(self, raw_answer: str) -> str:
+        """
+        提取纯净的答案内容，移除思考过程
+        
+        Args:
+            raw_answer: 原始答案（可能包含思考过程）
+            
+        Returns:
+            清洁的答案内容
+        """
+        import re
+        
+        # 常见的思考过程标记模式
+        thinking_patterns = [
+            r'<思考>.*?</思考>',
+            r'<thinking>.*?</thinking>', 
+            r'【思考过程】.*?【回答】',
+            r'思考过程：.*?\n\n',
+            r'让我思考一下.*?\n\n',
+            r'分析：.*?\n\n回答：',
+        ]
+        
+        clean_answer = raw_answer
+        
+        # 移除思考过程标记
+        for pattern in thinking_patterns:
+            clean_answer = re.sub(pattern, '', clean_answer, flags=re.DOTALL)
+        
+        # 移除多余的空白字符
+        clean_answer = re.sub(r'\n{3,}', '\n\n', clean_answer)
+        clean_answer = clean_answer.strip()
+        
+        # 如果经过清理后内容太短，可能过度清理了，返回原文
+        if len(clean_answer) < len(raw_answer) * 0.3:
+            return raw_answer.strip()
+            
+        return clean_answer
+
     def prepare_analysis_prompt(self, question: str, answer: str, citations_dict: Dict[int, str]) -> str:
-        """准备分析prompt（完整版本，不截断）"""
-        used_citations = self.extract_citations(answer)
+        """准备内部一致性分析prompt（不依赖引文）"""
+        # 清理答案，移除思考过程
+        clean_answer = self.extract_clean_answer(answer)
 
-        prompt_start = f"""请分析以下问答内容中引用与引文的匹配关系：
+        prompt_start = f"""你是一个专业的逻辑一致性检测专家。
 
-【完整答案内容（包含思考过程和回答内容）】
-{answer}
+【核心任务】
+检测AI回答是否存在内部逻辑矛盾、事实冲突或基础错误。
+**重要：完全不考虑外部引文或参考资料，只检查答案自身的内部一致性。**
 
-【答案中使用的引用标记】
-{used_citations}
+【检测类型】
+1. 无问题：答案逻辑清晰，前后一致，无明显错误
+2. 前后矛盾：答案内部提到的同一事实或观点前后不一致
+3. 逻辑错误：推理链条有漏洞，结论与前提不符，逻辑跳跃
+4. 基础错误：简单的数学计算错误、常识性错误、明显的事实性错误
+5. 自相矛盾：答案内部观点或立场相互冲突
 
-【可用引文内容】
-"""
+【重点关注】
+- 数字比较错误（如"11.9大于13"）
+- 时间逻辑错误（如"2020年比2023年晚"）
+- 因果关系混乱
+- 同一概念的不同定义或描述
+- 计算过程与结果不符
+- 违反基本常识的表述
+
+【问题】
+{question}
+
+【AI回答（已清理思考过程）】
+{clean_answer}
+
+请严格按照以下格式检测这个回答的内部一致性："""
 
         citations_text = ""
-        # 显示所有被使用的引文，完整内容
-        for citation_num in used_citations:
-            if citation_num in citations_dict:
-                cite_text = citations_dict[citation_num]
-                citations_text += f"引文{citation_num}：{cite_text}\n\n"
-            else:
-                citations_text += f"引文{citation_num}：（未找到对应内容）\n\n"
 
-        analysis_requirements = '''【分析要求】
-你是一个严谨的文本分析专家。
+        analysis_requirements = '''【输出格式要求】
+状态：[无问题/前后矛盾/逻辑错误/基础错误/自相矛盾]
+问题描述：[具体指出存在的问题，如果无问题则说明检查要点]
+具体位置：[指出问题出现的具体位置或句子]
 
-🚨 核心规则：只输出包含[citation:x]标记的句子！没有引用标记的句子绝对不能出现在JSON输出中！
+**检测示例**：
 
-你的任务：分析完整答案内容（包含思考过程和回答内容）中所有包含引用标记[citation:x]的句子，完全跳过没有引用标记的句子。
+状态：基础错误
+问题描述：数字比较错误，"11.9大于13"违反基本数学常识
+具体位置：第二段中"经过计算发现11.9大于13"
 
-**重要规则（必须严格遵守）**：
-- **引用边界识别**：引用标记[citation:x]的作用范围严格以句号（。）、换行符、段落分隔符为边界，绝对不能跨越这些边界
-- **逐句独立分析**：必须将文本按句号（。）拆分为独立句子，每个句子单独判断是否包含引用标记
-- **无引用标记=跳过**：如果一个句子内部没有[citation:x]标记，无论其前后句子是否有引用，都必须完全跳过该句子
-- **严禁跨句关联**：绝对不能将前一句子的引用标记应用到后续没有引用标记的句子上
-- **只输出两种结果**：判断只存在一致或不一致两种结果。如果引用里有一处可以被判断为不一致就直接判定为不一致
+状态：前后矛盾  
+问题描述：同一概念的描述前后不一致，先说"A是B的主要原因"，后说"A对B没有影响"
+具体位置：第一段vs第三段
 
-请遵循以下步骤和规则：
+状态：无问题
+问题描述：答案逻辑清晰，数据准确，前后一致，无明显错误
+具体位置：全文检查未发现问题
 
-1.  **逐句拆分**：将【完整答案内容】拆分为独立的观点或句子，在思考过程和回答内容两部分中都要查找。
-2.  **逐句分析**：对于每一个独立的观点或句子：
-    a. **首先检查**：该句子是否包含引用标记 `[citation:x]`。如果没有任何引用标记，立即跳过该句子，不进行分析。
-    b. **精确划定引用范围**：引用标记仅对引用标记列中位置**之前**的内容起作用。标点号后或新句子开始后的内容不在引用范围内。
-    c. 如果有引用标记，在对应的 `引文x` 中查找支持性证据。
-    d. **严格判断**：
-        (1) 事实一致性
-            * 关键数据（年份、数值、统计结果）是否完全匹配引文。
-            * 专业术语定义是否与引文原文一致（如"造血干细胞移植"≠"干细胞疗法"）。
-            * 案例/事件描述是否无虚构或篡改（如引文未提"淋巴瘤治疗",AI不得添加）。
-        (2) 内容完整性
-            * AI是否遗漏引文的关键限制条件（如"需配合化疗"被省略）。
-            * 是否擅自扩展引文范围（如引文仅支持"白血病",AI添加"再生障碍性贫血"）。
-            * 引文结论的适用边界是否被突破（如"部分有效"被改为"普遍有效"）。
-        (3) 语义匹配度
-            * 核心论点逻辑链是否与引文一致（如"生成疾病细胞→研究机制"是否完整保留）。
-            * 引文中的因果关系是否被曲解（如"收入提升因数字技术"≠"因政策扶持"）。
-            * 引文中的否定表述是否被错误转换为肯定（如"未证明有效"≠"证明有效"）。
-        (4) 引用规范性
-            * 引用的文献/期刊是否存在且未被虚构（如DOI验证失败或期刊已停刊）。
-            * 引用位置是否准确（如引文描述"细胞疗法"，AI误标为"基因治疗"）。
-            * 引用格式是否完整（缺失作者、出版年份、页码等关键信息）。
-        (5) 逻辑连贯性
-            * 多个引文合并时是否产生矛盾（如citation:1与citation:6结论冲突）。
-            * 图表数据与正文分析是否一致（如正文称"全国数据"，图表仅含局部样本）。
-            * 是否出现反常识推论（如"量子计算可治愈癌症"无依据）。
-3.  **输出格式**：
-    - 请不要输出整体的分析报告，也不要在分析中对“整体”作任何分析，就像用放大镜挑刺一样。
-    - 你的输出必须是一个JSON格式的列表 `[]`。
-    - 列表中的每个对象代表对一个观点/句子的分析，格式如下：
-      ```json
-      {
-        "topic": "被分析的句子或观点",
-        "citation_numbers": [引用的编号列表],
-        "consistency": "一致" 或 "不一致",
-        "reason": "详细的判断理由。如果一致，请说明证据在哪。如果不一致，请明确指出是哪个信息点在引文中无法找到或存在矛盾。"
-      }
-4. **空引用情况（绝对重要）**：
-    - **完全跳过规则**：如果一个句子没有[citation:x]标记，绝对不能出现在JSON输出中，连提及都不行
-    - **错误做法1**（绝对禁止）：
-      ```json
-      {
-        "topic": "火焰山的最佳游览时间是清晨7:00-9:00...",
-        "citation_numbers": [],
-        "consistency": "一致",
-        "reason": "该句无引用标记，根据规则应跳过..."
-      }
-      ```
-    - **错误做法2**（绝对禁止）：
-      ```json
-      {
-        "topic": "优化操作设置是提升游戏体验的关键。",
-        "citation_numbers": [],
-        "consistency": "不一致", 
-        "reason": "该句无引用标记..."
-      }
-      ```
-    - **正确做法**：这些句子在输出JSON中完全不存在，就像它们从未出现过一样
-
-**关键示例（引用边界识别）**：
-错误的文本："根据[citation:6][citation:7][citation:8]，吐鲁番的最佳旅游时间是4-5月和9-10月，气温适宜。火焰山的最佳游览时间是清晨7:00-9:00或傍晚18:00-20:00，避开正午高温。"
-
-**正确分析方法**：
-1. 第一句："根据[citation:6][citation:7][citation:8]，吐鲁番的最佳旅游时间是4-5月和9-10月，气温适宜。" → **包含引用标记，需要分析**
-2. 第二句："火焰山的最佳游览时间是清晨7:00-9:00或傍晚18:00-20:00，避开正午高温。" → **没有引用标记，必须跳过**
-
-**错误做法**（绝对禁止）：将第二句也关联到[citation:6][citation:7][citation:8]，这是错误的跨句关联。
-
-**示例输出**：
-      ```json
-      [
-        {
-          "topic": "根据[citation:6][citation:7][citation:8]，吐鲁番的最佳旅游时间是4-5月和9-10月，气温适宜",
-          "citation_numbers": [6, 7, 8],
-          "consistency": "一致",
-          "reason": "引文6、7、8均支持该时间段和气温描述"
-        }
-      ]
-      ```
-
-注意：上例中"火焰山..."句子完全不出现在输出中，因为它没有引用标记。
-'''
+**重要提醒**：
+- 只检查答案内部的逻辑一致性
+- 不考虑任何外部引文或参考资料
+- 重点关注低级错误（数学、常识、逻辑）
+- 严格按照格式输出'''
 
         return prompt_start + citations_text + analysis_requirements
 
@@ -629,121 +605,172 @@ class Method1BailianAnalyzer:
         return self.api_client.call_sync(prompt, max_retries=max_retries)
 
     def analyze_citation_quality(self, row: pd.Series) -> Dict[str, Any]:
-        """分析单行数据的引用质量"""
+        """分析单行数据的内部一致性（修改后不依赖引文）"""
         question = str(row['模型prompt'])
         answer = str(row['答案'])
 
-        # 构建引文字典
-        citations_dict = {}
-        for i in range(1, 21):
-            col_name = f'引文{i}'
-            if col_name in row and pd.notna(row[col_name]):
-                citations_dict[i] = str(row[col_name])
-
-        # 提取使用的引用
-        citations_used = self.extract_citations(answer)
+        # 清理答案，移除思考过程
+        clean_answer = self.extract_clean_answer(answer)
 
         print(f"    问题长度: {len(question)}字符")
-        print(f"    答案长度: {len(answer)}字符")
-        print(f"    可用引文: {len(citations_dict)}个")
-        print(f"    实际引用: {citations_used}")
+        print(f"    原始答案长度: {len(answer)}字符")
+        print(f"    清理后答案长度: {len(clean_answer)}字符")
 
-        # 如果没有任何引用，跳过分析
-        if not citations_used:
-            print("    跳过分析：答案中没有任何引用标记")
+        # 检查必要数据（不再要求引文）
+        if not question.strip() or not clean_answer.strip():
+            print("    跳过分析：缺少必要的问题或答案数据")
             return {
                 'question': question,
-                'answer_preview': answer[:200] + '...' if len(answer) > 200 else answer,
-                'citations_used': citations_used,
-                'citations_available': list(citations_dict.keys()),
-                'api_success': True,  # 标记为成功但跳过
-                'api_error': None,
-                'analysis': '跳过分析：答案中没有引用标记',
+                'answer_preview': clean_answer,
+                'original_answer_length': len(answer),
+                'clean_answer_length': len(clean_answer),
+                'api_success': False,
+                'api_error': '缺少必要的问题或答案数据',
+                'analysis': None,
                 'skipped': True
             }
 
-        # 生成分析prompt
-        analysis_prompt = self.prepare_analysis_prompt(question, answer, citations_dict)
+        # 生成内部一致性检测prompt（不传递引文字典）
+        analysis_prompt = self.prepare_analysis_prompt(question, answer, {})
 
         # 调用API分析
         api_result = self.call_api(analysis_prompt)
 
-        analysis_content = None
+        # 解析响应结果
+        status = "无问题"
+        description = "答案逻辑一致，无明显问题"
+        location = ""
+        
         if api_result['success']:
             try:
-                # 尝试解析API返回的JSON字符串
-                analysis_content = json.loads(api_result['content'])
-            except json.JSONDecodeError:
-                # 如果解析失败，说明返回的不是合法的JSON，作为原始文本处理
-                analysis_content = api_result['content']
+                content = api_result['content'].strip()
+                # 解析内部一致性检测结果
+                status, description, location = self._parse_consistency_result(content)
+            except Exception as e:
+                print(f"    响应解析失败: {e}")
+                description = f"解析异常: {str(e)}"
 
         result = {
             'question': question,
-            'answer_preview': answer[:200] + '...' if len(answer) > 200 else answer,
-            'citations_used': citations_used,
-            'citations_available': list(citations_dict.keys()),
+            'answer_preview': clean_answer,
+            'original_answer_length': len(answer),
+            'clean_answer_length': len(clean_answer),
             'api_success': api_result['success'],
             'api_error': api_result['error'],
-            'analysis': analysis_content,
+            'status': status,
+            'description': description,
+            'location': location,
+            'raw_response': api_result['content'] if api_result['success'] else None,
             'skipped': False
         }
 
         return result
+    
+    def _parse_consistency_result(self, response_text: str) -> tuple[str, str, str]:
+        """
+        解析内部一致性检测结果
+        
+        Args:
+            response_text: API返回的分析文本
+            
+        Returns:
+            (status, description, location): 状态、问题描述、具体位置的元组
+        """
+        response_text = response_text.strip()
+        
+        # 初始化返回值
+        status = "无问题"
+        description = "答案逻辑一致，无明显问题"
+        location = ""
+        
+        # 提取状态
+        if "状态：" in response_text:
+            status_match = re.search(r'状态：\s*([^\n]+)', response_text)
+            if status_match:
+                status = status_match.group(1).strip()
+        
+        # 根据关键词识别状态
+        if "前后矛盾" in response_text:
+            status = "前后矛盾"
+        elif "逻辑错误" in response_text:
+            status = "逻辑错误"
+        elif "基础错误" in response_text:
+            status = "基础错误"
+        elif "自相矛盾" in response_text:
+            status = "自相矛盾"
+        elif "无问题" in response_text:
+            status = "无问题"
+        
+        # 提取问题描述
+        if "问题描述：" in response_text:
+            desc_match = re.search(r'问题描述：\s*([^\n]+(?:\n[^\n]*)*?)(?=具体位置：|$)', response_text, re.MULTILINE)
+            if desc_match:
+                description = desc_match.group(1).strip()
+        
+        # 提取具体位置
+        if "具体位置：" in response_text:
+            loc_match = re.search(r'具体位置：\s*([^\n]+(?:\n[^\n]*)*?)(?=$)', response_text, re.MULTILINE)
+            if loc_match:
+                location = loc_match.group(1).strip()
+        
+        return status, description, location
 
     async def analyze_citation_quality_async(self, session: aiohttp.ClientSession, row: pd.Series, rank: int) -> Dict[
         str, Any]:
-        """异步分析单行数据的引用质量"""
+        """异步分析单行数据的内部一致性（修改后不依赖引文）"""
         question = str(row['模型prompt'])
         answer = str(row['答案'])
 
-        # 构建引文字典
-        citations_dict = {}
-        for i in range(1, 21):
-            col_name = f'引文{i}'
-            if col_name in row and pd.notna(row[col_name]):
-                citations_dict[i] = str(row[col_name])
+        # 清理答案，移除思考过程
+        clean_answer = self.extract_clean_answer(answer)
 
-        # 提取使用的引用
-        citations_used = self.extract_citations(answer)
-
-        # 如果没有任何引用，跳过分析
-        if not citations_used:
+        # 检查必要数据（不再要求引文）
+        if not question.strip() or not clean_answer.strip():
             return {
                 'rank': rank,
                 'question': question,
-                'answer_preview': answer[:200] + '...' if len(answer) > 200 else answer,
-                'citations_used': citations_used,
-                'citations_available': list(citations_dict.keys()),
-                'api_success': True,  # 标记为成功但跳过
-                'api_error': None,
-                'analysis': '跳过分析：答案中没有引用标记',
+                'answer_preview': clean_answer,
+                'original_answer_length': len(answer),
+                'clean_answer_length': len(clean_answer),
+                'api_success': False,
+                'api_error': '缺少必要的问题或答案数据',
+                'status': 'unknown',
+                'description': '',
+                'location': '',
                 'skipped': True
             }
 
-        # 生成分析prompt
-        analysis_prompt = self.prepare_analysis_prompt(question, answer, citations_dict)
+        # 生成内部一致性检测prompt（不传递引文字典）
+        analysis_prompt = self.prepare_analysis_prompt(question, answer, {})
 
         # 调用异步API分析
         api_result = await self.call_api_async(session, analysis_prompt)
 
-        analysis_content = None
+        # 解析响应结果
+        status = "无问题"
+        description = "答案逻辑一致，无明显问题"
+        location = ""
+        
         if api_result['success']:
             try:
-                # 尝试解析API返回的JSON字符串
-                analysis_content = json.loads(api_result['content'])
-            except json.JSONDecodeError:
-                # 如果解析失败，说明返回的不是合法的JSON，作为原始文本处理
-                analysis_content = api_result['content']
+                content = api_result['content'].strip()
+                # 解析内部一致性检测结果
+                status, description, location = self._parse_consistency_result(content)
+            except Exception as e:
+                description = f"解析异常: {str(e)}"
 
         result = {
             'rank': rank,
             'question': question,
-            'answer_preview': answer[:200] + '...' if len(answer) > 200 else answer,
-            'citations_used': citations_used,
-            'citations_available': list(citations_dict.keys()),
+            'answer_preview': clean_answer,
+            'original_answer_length': len(answer),
+            'clean_answer_length': len(clean_answer),
             'api_success': api_result['success'],
             'api_error': api_result['error'],
-            'analysis': analysis_content,
+            'status': status,
+            'description': description,
+            'location': location,
+            'raw_response': api_result['content'] if api_result['success'] else None,
             'skipped': False
         }
 

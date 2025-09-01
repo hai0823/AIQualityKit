@@ -99,38 +99,94 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 3. 点击"分析文本"按钮。
 4. 查看返回的JSON格式分析结果。
 
-## 技术架构
+## 系统架构
 
-### API客户端架构
-- **统一API客户端**: `app/utils/api_client.py` 提供统一接口支持多个AI服务商
-- **支持的提供商**: 阿里云百炼、OpenAI、DeepSeek、NuwaAPI
-- **自动重试机制**: 内置连接失败和服务器错误的重试逻辑
-- **Token统计**: 自动统计输入/输出token使用量
+```mermaid
+graph TB
+    subgraph "🌐 Web界面层"
+        A[Web界面<br/>文件上传 + 配置]
+    end
 
-### 分析器模块
-- **Fulltext分析器**: `app/logic/citation_analyzer_fulltext.py` - 完整文本分析
-- **Sliced分析器**: 
-  - `app/logic/citation_analyzer_async.py` - 异步并发处理
-  - `app/logic/citation_analyzer_sync.py` - 同步顺序处理  
-  - `app/logic/citation_analyzer_sliced.py` - 统一分片处理接口
-- **幻觉检测器**: `app/logic/hallucination_detector_simplified.py` - 五分类幻觉检测
-- **引文处理器**: `app/logic/citation_processor.py` - 提取引文标注的句子
+    subgraph "🚀 API服务层"
+        B[FastAPI服务<br/>路由与业务逻辑]
+    end
 
-### 数据处理流程
-1. **Excel文件** → `citation_processor` → **提取引文标注**
-2. **标注句子** → `分析器` → **一致性评估**
-3. **评估结果** → 保存至 `data/output/results/`
+    subgraph "🧠 核心分析器"
+        C[FullText分析器<br/>内部一致性检测]
+        D[Sliced分析器<br/>引文片段分析]
+    end
 
-### 输出文件结构
+    subgraph "🔧 基础设施层"
+        E[统一API客户端<br/>多提供商支持]
+        F[数据处理<br/>Excel解析 + 清理]
+    end
+
+    subgraph "💾 存储层"
+        G[结果存储<br/>JSON + 断点续传]
+    end
+
+    %% 数据流向
+    A --> B
+    B --> C
+    B --> D
+    C --> E
+    D --> E
+    B --> F
+    C --> G
+    D --> G
+
+    %% 样式
+    classDef webLayer fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef apiLayer fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef analysisLayer fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef infraLayer fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef storageLayer fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+
+    class A webLayer
+    class B apiLayer
+    class C,D analysisLayer
+    class E,F infraLayer
+    class G storageLayer
 ```
-data/output/
-├── results/                  # 分析结果
-│   ├── qwen_all_results_*.json
-│   ├── qwen_consistency_results_*.json
-│   └── qwen_inconsistency_results_*.json
-└── checkpoints/              # 断点续传文件
-    └── qwen_evaluation_checkpoint_*.json
-```
+
+### 🔧 核心组件说明
+
+#### 1. Web界面层
+- **用户交互**: 文件上传、API配置、实时结果展示
+- **多格式支持**: Excel批量上传 + 单文本即时分析
+
+#### 2. API服务层  
+- **路由管理**: RESTful API设计，支持批量和单文本分析
+- **业务逻辑**: 协调各分析器模块，处理并发请求
+
+#### 3. 核心分析器
+- **FullText分析器**: 
+  - ⚠️ **核心功能**: 内部一致性检测（不依赖引文）
+  - 🔍 自动清理思考过程，检测基础错误（如"11.9>13"）
+- **Sliced分析器**: 引文片段的精准一致性分析
+
+#### 4. 基础设施层
+- **统一API客户端**: 支持阿里云、OpenAI、DeepSeek，智能重试与负载均衡
+- **数据处理**: Excel解析、内容清理、并发优化
+
+#### 5. 存储层
+- **结果管理**: JSON格式存储、断点续传、版本控制
+
+### 📈 数据流程
+
+1. **上传阶段**: Excel文件 → 数据解析 → 提取问答对
+2. **清理阶段**: 移除思考过程 → 获得纯净答案
+3. **分析阶段**: 调用AI模型 → 检测内部一致性
+4. **输出阶段**: 结构化结果 → JSON文件保存
+
+### 🔄 重要更新：内部一致性检测
+
+**新版幻觉检测**完全重写，现在支持：
+- ✅ **无需引文**: 只分析问题+答案，完全不输入引文
+- ✅ **自动清理**: 智能移除答案中的思考过程  
+- ✅ **基础错误检测**: 专门捕获"11.9>13"等低级错误
+- ✅ **逻辑一致性**: 检测前后矛盾、自相矛盾
+- ✅ **五大类型**: 无问题/前后矛盾/逻辑错误/基础错误/自相矛盾
 
 ## 最近更新
 
