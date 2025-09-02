@@ -14,6 +14,8 @@ dependencies = [
     "requests",
     "aiofiles>=24.1.0",
     "tiktoken>=0.11.0",
+    "openai>=1.102.0",
+    "httpx[socks]>=0.28.1",
 ]
 
 [build-system]

@@ -39,17 +39,14 @@ class Method1BailianAnalyzer:
         print(f"正在使用提供商: {self.provider}")
         print(f"正在使用模型: {self.model}")
         print(f"并发限制: {self.concurrent_limit}条")
+        print(f"API密钥: {'已设置' if self.api_key else '未设置'} ({self.api_key[:10]}... 如果已设置)")
 
         if not self.api_key:
             print(f"警告：未找到API密钥，无法调用{self.provider} API")
     
     def _configure_provider(self, api_key: str, base_url: str, model: str):
         """配置不同的API提供商"""
-        # 修正NUWA_KEY环境变量名
-        if self.provider == "nuwaapi":
-            api_key = api_key or os.getenv('NUWA_KEY')
-        
-        # 使用通用API客户端
+        # 使用通用API客户端，不再依赖环境变量
         self.api_client = create_api_client(self.provider, api_key, base_url, model)
         
         # 保持兼容性
@@ -855,6 +852,15 @@ class Method1BailianAnalyzer:
 
         # 调用异步API分析
         api_result = await self.call_api_async(session, analysis_prompt)
+        
+        # 统计Token使用（异步版本）
+        if api_result['success']:
+            prompt_tokens = self.token_counter.count_tokens(analysis_prompt)
+            response_tokens = self.token_counter.count_tokens(api_result['content'])
+            self.total_input_tokens += prompt_tokens
+            self.total_output_tokens += response_tokens
+            self.total_tokens = self.total_input_tokens + self.total_output_tokens
+            self.api_call_count += 1
 
         # 构建引文分析结果
         if api_result['success']:
@@ -862,8 +868,58 @@ class Method1BailianAnalyzer:
                 content = api_result['content'].strip()
                 # 提取markdown代码块中的JSON内容
                 json_content = self._extract_json_from_response(content)
-                # 尝试解析JSON格式的引文分析结果
-                citation_analysis = json.loads(json_content)
+                
+                # 修复JSON中的各种问题 - 使用更保守的策略
+                import re
+                
+                # 添加调试信息
+                print(f"[DEBUG] 原始JSON内容前100字符: {json_content[:100]}")
+                print(f"[DEBUG] JSON内容长度: {len(json_content)}")
+                
+                # 尝试直接解析，如果成功就不做任何修复
+                try:
+                    citation_analysis = json.loads(json_content)
+                    print(f"[DEBUG] 直接解析成功，无需修复")
+                except json.JSONDecodeError as direct_error:
+                    print(f"[DEBUG] 直接解析失败: {direct_error}")
+                    
+                    # 只有在直接解析失败时才应用修复
+                    def minimal_fix(text):
+                        # 最小化修复：只处理明显的问题
+                        text = text.strip()
+                        
+                        # 移除BOM和其他不可见字符
+                        text = text.lstrip('\ufeff')
+                        
+                        # 如果不是以[或{开头，尝试找到JSON内容的开始
+                        if not (text.startswith('[') or text.startswith('{')):
+                            # 查找第一个[或{
+                            start_match = re.search(r'[\[\{]', text)
+                            if start_match:
+                                text = text[start_match.start():]
+                        
+                        # 基础结构检查
+                        if text.startswith('[') and not text.rstrip().endswith(']'):
+                            # 尝试补全数组
+                            if text.rstrip().endswith(','):
+                                text = text.rstrip().rstrip(',') + '\n]'
+                            elif not text.rstrip().endswith('}'):
+                                text += '\n}]'
+                            else:
+                                text += '\n]'
+                        
+                        return text
+                    
+                    # 应用最小化修复
+                    fixed_content = minimal_fix(json_content)
+                    print(f"[DEBUG] 修复后内容前100字符: {fixed_content[:100]}")
+                    
+                    try:
+                        citation_analysis = json.loads(fixed_content)
+                        print(f"[DEBUG] 修复后解析成功")
+                    except json.JSONDecodeError as final_error:
+                        print(f"[DEBUG] 修复后仍然失败: {final_error}")
+                        raise final_error
                 if isinstance(citation_analysis, list):
                     # 统计一致性情况
                     consistent_count = sum(1 for item in citation_analysis if item.get('consistency') == '一致')
@@ -989,6 +1045,9 @@ class Method1BailianAnalyzer:
         print(f"总用时: {total_time:.1f}秒")
         print(f"平均每条: {total_time / len(completed_tasks):.2f}秒")
         print(f"成功: {success_count}条, 失败: {failed_count}条")
+        
+        # 打印token统计
+        self.print_token_statistics()
 
         return completed_tasks
 

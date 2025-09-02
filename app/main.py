@@ -107,16 +107,12 @@ async def analyze_xlsx_file(
     """
     上传xlsx文件进行批量引文分析
     """
-    print("🚨🚨🚨 API函数 analyze_xlsx_file 被调用了！🚨🚨🚨")
-    
     # 获取API配置和分析类型
     api_key = request.headers.get('X-API-Key')
     api_provider = request.headers.get('X-API-Provider', 'alibaba')
     api_model = request.headers.get('X-API-Model', '')
     api_base_url = request.headers.get('X-API-Base-URL', '')
     analysis_type = request.headers.get('X-Analysis-Type', 'fulltext')
-    
-    print(f"🔑 API配置: 密钥={'已设置' if api_key else '未设置'}, 提供商={api_provider}, 模型={api_model or '默认'}, 分析类型={analysis_type}")
     
     if not api_key:
         return JSONResponse(

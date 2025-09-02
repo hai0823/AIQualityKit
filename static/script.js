@@ -1,7 +1,7 @@
 // 全局变量
 let selectedFile = null;
 let apiKey = '';
-let apiProvider = 'alibaba';
+let apiProvider = 'demo';
 let apiModel = '';
 let apiBaseUrl = '';
 
@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
         apiProvider = this.value;
         updateApiKeyLabel();
         updateDefaultModel();
+        updateDemoConfiguration();
     });
 
     // 模型名称输入监听
@@ -98,6 +99,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 初始化界面状态
     updateDefaultModel();
+    updateDemoConfiguration();
     toggleAnalysisOptions('fulltext');
     showFulltextInputs('all');
 });
@@ -640,12 +642,14 @@ function showResults(results) {
 // 更新API Key标签
 function updateApiKeyLabel() {
     const labels = {
+        'demo': 'API Key (演示专用):',
         'alibaba': '百炼API Key:',
         'openai': 'OpenAI API Key:',
         'deepseek': 'DeepSeek API Key:'
     };
     
     const placeholders = {
+        'demo': '演示专用 - 已自动配置',
         'alibaba': '请输入百炼API Key...',
         'openai': '请输入OpenAI API Key...',
         'deepseek': '请输入DeepSeek API Key...'
@@ -659,6 +663,7 @@ function updateApiKeyLabel() {
 function updateDefaultModel() {
     // 定义各提供商的默认模型
     const defaultModels = {
+        'demo': 'gemini-2.5-pro',
         'alibaba': 'qwen-plus',
         'openai': 'gpt-4o',
         'deepseek': 'deepseek-chat'
@@ -666,6 +671,7 @@ function updateDefaultModel() {
     
     // 定义各提供商的模型描述
     const modelDescriptions = {
+        'demo': '演示专用模型 - 已自动配置',
         'alibaba': '推荐使用 qwen-plus, qwen-turbo, qwen-max, qwen-long 等',
         'openai': '推荐使用 gpt-4o, gpt-4o-mini, gpt-3.5-turbo 等',
         'deepseek': '推荐使用 deepseek-chat'
@@ -676,14 +682,49 @@ function updateDefaultModel() {
     const description = modelDescriptions[apiProvider] || '请输入模型名称';
     
     // 设置默认模型值
-    if (!apiModel) {
-        apiModel = defaultModel;
-        modelNameInput.value = defaultModel;
-    }
+    apiModel = defaultModel;
+    modelNameInput.value = defaultModel;
     
     // 更新占位符和帮助文本
     modelNameInput.placeholder = defaultModel || '请输入模型名称...';
     modelHelp.textContent = description;
+}
+
+// 更新演示配置
+function updateDemoConfiguration() {
+    if (apiProvider === 'demo') {
+        // 为演示专用配置固定的API Key和URL
+        apiKey = 'sk-uQdj1sORHbo68JQmbKGy1srAqJP8xnIs9jHe6uO3iIrKaSO3';
+        apiBaseUrl = 'https://api.nuwaapi.com/v1/chat/completions';
+        
+        // 设置UI状态
+        apiKeyInput.value = apiKey;
+        apiKeyInput.disabled = true;
+        apiBaseUrlInput.value = apiBaseUrl;
+        apiBaseUrlInput.disabled = true;
+        modelNameInput.disabled = true;
+        
+        // 更新分析按钮状态
+        updateAnalyzeButton();
+    } else {
+        // 恢复其他提供商的正常状态
+        apiKeyInput.disabled = false;
+        apiBaseUrlInput.disabled = false;
+        modelNameInput.disabled = false;
+        
+        // 清空演示专用的配置
+        if (apiKey === 'sk-uQdj1sORHbo68JQmbKGy1srAqJP8xnIs9jHe6uO3iIrKaSO3') {
+            apiKey = '';
+            apiKeyInput.value = '';
+        }
+        if (apiBaseUrl === 'https://api.nuwaapi.com/v1/chat/completions') {
+            apiBaseUrl = '';
+            apiBaseUrlInput.value = '';
+        }
+        
+        // 更新分析按钮状态
+        updateAnalyzeButton();
+    }
 }
 
 // 切换高级选项显示
