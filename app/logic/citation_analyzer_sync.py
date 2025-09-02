@@ -26,6 +26,7 @@ import logging
 from collections import defaultdict
 import argparse
 from ..utils.api_client import create_api_client
+from ..utils.token_counter import TokenCounter
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -62,6 +63,13 @@ class ConsistencyEvaluator:
         self.base_url = self.api_client.base_url
         self.model = self.api_client.model
         self.max_input_length = 128000  # 128k字符限制
+        
+        # 初始化精确token计数器
+        self.token_counter = TokenCounter(self.model)
+        
+        # 设置rank范围
+        self.rank_start = rank_start
+        self.rank_end = rank_end
         
         if not self.api_key:
             raise ValueError(f"API密钥未设置。请设置对应的环境变量或通过参数传入。")
@@ -349,9 +357,17 @@ Rank: {rank}
         result = self.api_client.call_sync(prompt, temperature=0.1, max_tokens=16000, max_retries=max_retries)
         
         if result['success']:
-            logger.debug(f"API调用成功，响应长度: {len(result['content'])}")
+            content = result['content']
+            # 精确统计token数量
+            input_tokens = self.token_counter.count_tokens(prompt)
+            output_tokens = self.token_counter.count_tokens(content)
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_tokens += input_tokens + output_tokens
             self.api_call_count += 1
-            return result['content']
+            
+            logger.debug(f"API调用成功，响应长度: {len(content)}, 输入tokens: {input_tokens}, 输出tokens: {output_tokens}")
+            return content
         else:
             logger.error(f"API调用失败: {result['error']}")
             return None
@@ -870,6 +886,9 @@ Rank: {rank}
             logger.info("检查点文件已清理")
 
         logger.info(f"评估完成，总共处理了{len(all_results)}条数据")
+        
+        # 7. 返回结果给调用方
+        return all_results
 
 
 def main():

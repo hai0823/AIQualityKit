@@ -14,6 +14,7 @@ import re
 from typing import Dict, List, Any
 import time
 from ..utils.api_client import create_api_client
+from ..utils.token_counter import TokenCounter
 
 
 class Method1BailianAnalyzer:
@@ -55,6 +56,15 @@ class Method1BailianAnalyzer:
         self.api_key = self.api_client.api_key
         self.api_ep = self.api_client.base_url
         self.model = self.api_client.model
+        
+        # 初始化精确token计数器
+        self.token_counter = TokenCounter(self.model)
+        
+        # Token使用统计
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_tokens = 0
+        self.api_call_count = 0
 
     def count_chars(self, text: str) -> int:
         """简单的字符计数估算token"""
@@ -458,8 +468,10 @@ class Method1BailianAnalyzer:
             }
         }
 
-        prompt_tokens = self.count_chars(prompt)
-        print(f"    调用阿里云API... (估算请求Token: {prompt_tokens})")
+        prompt_tokens = self.token_counter.count_tokens(prompt)
+        self.total_input_tokens += prompt_tokens
+        self.api_call_count += 1
+        print(f"    调用阿里云API... (精确请求Token: {prompt_tokens})")
 
         # 重试循环
         last_error = None
@@ -476,8 +488,10 @@ class Method1BailianAnalyzer:
 
                     if result.get('output') and result['output'].get('text'):
                         content = result['output']['text']
-                        response_tokens = self.count_chars(content)
-                        print(f"    估算响应Token: {response_tokens}")
+                        response_tokens = self.token_counter.count_tokens(content)
+                        self.total_output_tokens += response_tokens
+                        self.total_tokens = self.total_input_tokens + self.total_output_tokens
+                        print(f"    精确响应Token: {response_tokens}")
                         return {
                             'success': True,
                             'error': None,
@@ -572,8 +586,10 @@ class Method1BailianAnalyzer:
             'max_tokens': 15000
         }
 
-        prompt_tokens = self.count_chars(prompt)
-        print(f"    调用{self.provider}API... (估算请求Token: {prompt_tokens})")
+        prompt_tokens = self.token_counter.count_tokens(prompt)
+        self.total_input_tokens += prompt_tokens
+        self.api_call_count += 1
+        print(f"    调用{self.provider}API... (精确请求Token: {prompt_tokens})")
 
         # 重试循环
         last_error = None
@@ -590,8 +606,10 @@ class Method1BailianAnalyzer:
 
                     if result.get('choices') and len(result['choices']) > 0:
                         content = result['choices'][0]['message']['content']
-                        response_tokens = self.count_chars(content)
-                        print(f"    估算响应Token: {response_tokens}")
+                        response_tokens = self.token_counter.count_tokens(content)
+                        self.total_output_tokens += response_tokens
+                        self.total_tokens = self.total_input_tokens + self.total_output_tokens
+                        print(f"    精确响应Token: {response_tokens}")
                         return {
                             'success': True,
                             'error': None,
@@ -1052,7 +1070,22 @@ class Method1BailianAnalyzer:
         print(f"\n=== 方案1百炼版分析完成 ===")
         print(f"成功: {success_count}条, 失败: {failed_count}条")
 
+        # 打印token统计
+        self.print_token_statistics()
+        
         return results
+
+    def print_token_statistics(self):
+        """输出token使用统计信息"""
+        print(f"\n=== Token使用统计 ===")
+        print(f"API调用次数: {self.api_call_count}")
+        print(f"输入Token总计: {self.total_input_tokens:,}")
+        print(f"输出Token总计: {self.total_output_tokens:,}")
+        print(f"Token总计: {self.total_tokens:,}")
+        if self.api_call_count > 0:
+            print(f"平均每次调用输入Token: {self.total_input_tokens / self.api_call_count:.1f}")
+            print(f"平均每次调用输出Token: {self.total_output_tokens / self.api_call_count:.1f}")
+            print(f"平均每次调用总Token: {self.total_tokens / self.api_call_count:.1f}")
 
     def save_results(self, results: List[Dict[str, Any]], output_path: str):
         """保存分析结果，增强错误处理"""

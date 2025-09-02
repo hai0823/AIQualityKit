@@ -28,6 +28,7 @@ from collections import defaultdict
 import argparse
 
 from app.utils.api_client import create_api_client
+from app.utils.token_counter import TokenCounter
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,6 +43,10 @@ class ConsistencyEvaluator:
         self.provider = provider
         self.max_input_length = 128000  # 128k字符限制
         self.concurrent_limit = concurrent_limit
+        
+        # 初始化精确token计数器
+        model_name = self.api_client.model
+        self.token_counter = TokenCounter(model_name)
         
         # 保存rank范围作为实例属性
         self.rank_start = rank_start
@@ -411,9 +416,9 @@ Rank: {rank}
                     self.api_call_count += 1
                     content = result.get('content', '')
                     
-                    # 统计token数量（简单估算）
-                    input_tokens = self.api_client.count_chars(prompt)
-                    output_tokens = self.api_client.count_chars(content)
+                    # 统计token数量（精确计算）
+                    input_tokens = self.token_counter.count_tokens(prompt)
+                    output_tokens = self.token_counter.count_tokens(content)
                     self.total_input_tokens += input_tokens
                     self.total_output_tokens += output_tokens
                     self.total_tokens += input_tokens + output_tokens

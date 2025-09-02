@@ -149,7 +149,18 @@ class APIClient:
                 # 验证关键数据
                 print(f"  准备发送请求:")
                 print(f"    prompt是否为空: {not prompt or prompt.strip() == ''}")
-                print(f"    data['messages'][0]['content']长度: {len(data['messages'][0]['content'])}")
+                
+                # 根据请求格式获取消息内容
+                if self._request_format == "alibaba":
+                    messages = data.get('input', {}).get('messages', [])
+                else:
+                    messages = data.get('messages', [])
+                
+                if messages:
+                    print(f"    消息内容长度: {len(messages[0].get('content', ''))}")
+                else:
+                    print(f"    警告: 未找到消息内容")
+                    
                 print(f"    实际JSON: {json.dumps(data, ensure_ascii=False)[:200]}...")
                 
                 response = requests.post(self.base_url, headers=headers, json=data, timeout=180)
