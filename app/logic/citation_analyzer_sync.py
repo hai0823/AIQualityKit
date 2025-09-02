@@ -1,20 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-使用阿里云百炼API评估标注句子与引文内容一致性的增强版程序
-
-功能：
-1. 从citation_results.json读取标注句子数据
-2. 从正文引文内容.xlsx读取引文内容数据
-3. 调用阿里云百炼API评估一致性
-4. 支持批量处理相同rank的数据
-5. 支持断点续传和中间结果保存
-6. 支持可配置的rank范围评测
-7. 输出三个JSON格式结果文件
-
-作者：AI Assistant
-日期：2024
-"""
 
 import json
 import pandas as pd

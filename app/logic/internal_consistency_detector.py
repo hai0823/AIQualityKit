@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+
 """
 内部一致性检测器 - 检测AI回答自身的逻辑一致性
 不依赖外部引文，专门检测答案内部的矛盾、错误和逻辑问题
@@ -13,6 +12,7 @@ import re
 from typing import Dict, Any, List, Optional
 import logging
 from ..utils.api_client import create_api_client
+from ..utils.token_counter import TokenCounter
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,15 @@ class InternalConsistencyDetector:
         self.api_key = self.api_client.api_key
         self.base_url = self.api_client.base_url
         self.model = self.api_client.model
+        
+        # 初始化token计数器
+        self.token_counter = TokenCounter(self.model)
+        
+        # Token统计
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_tokens = 0
+        self.api_call_count = 0
         
         if not self.api_key:
             raise ValueError(f"API密钥未设置，请提供{provider} API密钥")
@@ -102,16 +111,37 @@ class InternalConsistencyDetector:
 
 【重点关注】
 - 数字比较错误（如"11.9大于13"）
-- 时间逻辑错误（如"2020年比2023年晚"）
+- 同一个答案内部的矛盾陈述
 - 因果关系混乱
 - 同一概念的不同定义或描述
 - 计算过程与结果不符
 - 违反基本常识的表述
 
+【严格禁止分析的内容】
+❌ 绝对不要分析任何时间相关的内容，包括：
+- 日期是否"准确"或"当前"
+- 时间信息是否"过时"
+- 答案提到的时间与"现在"的关系
+- 任何形式的时效性判断
+
+❌ 绝对不要分析外部事实准确性，包括：
+- 统计数据是否为"最新"
+- 事件是否"真实发生"
+- 信息是否"过期"
+
+✅ 只分析答案内部的逻辑一致性，例如：
+- 答案内部前后说法矛盾
+- 计算错误
+- 逻辑推理错误
+- 定义不一致
+
 【输出格式】
-状态：[无问题/前后矛盾/逻辑错误/基础错误/自相矛盾]
-问题描述：[具体指出存在的问题，如果无问题则说明检查要点]
-具体位置：[指出问题出现的具体位置或句子]"""
+请直接返回JSON格式：
+{
+  "status": "无问题|前后矛盾|逻辑错误|基础错误|自相矛盾",
+  "description": "具体问题描述",
+  "location": "具体位置"
+}"""
 
         user_prompt = f"""【问题】
 {question}
@@ -119,7 +149,7 @@ class InternalConsistencyDetector:
 【AI回答】
 {answer}
 
-请严格按照要求格式检测这个回答的内部一致性："""
+请检测这个回答的内部一致性并返回JSON格式结果："""
 
         return f"{system_prompt}\n\n{user_prompt}"
 
@@ -141,35 +171,61 @@ class InternalConsistencyDetector:
         description = "答案逻辑一致，无明显问题"
         location = ""
         
-        # 提取状态
-        if "状态：" in response_text:
-            status_match = re.search(r'状态：\s*([^\\n]+)', response_text)
-            if status_match:
-                status = status_match.group(1).strip()
+        try:
+            # 首先尝试解析JSON格式
+            # 查找JSON内容（可能被包裹在其他文本中）
+            json_match = re.search(r'\{[^{}]*"status"[^{}]*\}', response_text, re.DOTALL)
+            if json_match:
+                json_text = json_match.group(0)
+                parsed_json = json.loads(json_text)
+                
+                status = parsed_json.get('status', '无问题')
+                description = parsed_json.get('description', '答案逻辑一致，无明显问题')
+                location = parsed_json.get('location', '')
+                
+                return status, description, location
+        except (json.JSONDecodeError, AttributeError):
+            pass
         
-        # 根据关键词识别状态
-        if "前后矛盾" in response_text:
-            status = "前后矛盾"
-        elif "逻辑错误" in response_text:
-            status = "逻辑错误"
-        elif "基础错误" in response_text:
-            status = "基础错误"
-        elif "自相矛盾" in response_text:
-            status = "自相矛盾"
-        elif "无问题" in response_text:
-            status = "无问题"
-        
-        # 提取问题描述
-        if "问题描述：" in response_text:
-            desc_match = re.search(r'问题描述：\s*([^\\n]+(?:\\n[^\\n]*)*?)(?=具体位置：|$)', response_text, re.MULTILINE)
-            if desc_match:
-                description = desc_match.group(1).strip()
-        
-        # 提取具体位置
-        if "具体位置：" in response_text:
-            loc_match = re.search(r'具体位置：\s*([^\\n]+(?:\\n[^\\n]*)*?)(?=$)', response_text, re.MULTILINE)
-            if loc_match:
-                location = loc_match.group(1).strip()
+        # 如果JSON解析失败，尝试文本提取（兼容旧格式）
+        try:
+            # 提取状态
+            if "状态：" in response_text:
+                status_match = re.search(r'状态：\s*([^\\n]+)', response_text)
+                if status_match:
+                    status = status_match.group(1).strip()
+            
+            # 更精确的关键词识别状态，避免误匹配
+            status_keywords = {
+                "前后矛盾": ["前后矛盾"],
+                "逻辑错误": ["逻辑错误"],
+                "基础错误": ["基础错误"],
+                "自相矛盾": ["自相矛盾"],
+                "无问题": ["无问题", "无明显问题", "逻辑清晰"]
+            }
+            
+            # 只有在明确找到状态关键词时才覆盖
+            for status_name, keywords in status_keywords.items():
+                for keyword in keywords:
+                    if keyword in response_text and status == "无问题":  # 只在默认状态时更新
+                        status = status_name
+                        break
+            
+            # 提取问题描述
+            if "问题描述：" in response_text:
+                desc_match = re.search(r'问题描述：\s*([^\\n]+(?:\\n[^\\n]*)*?)(?=具体位置：|$)', response_text, re.MULTILINE)
+                if desc_match:
+                    description = desc_match.group(1).strip()
+            
+            # 提取具体位置
+            if "具体位置：" in response_text:
+                loc_match = re.search(r'具体位置：\s*([^\\n]+(?:\\n[^\\n]*)*?)(?=$)', response_text, re.MULTILINE)
+                if loc_match:
+                    location = loc_match.group(1).strip()
+                    
+        except Exception as e:
+            print(f"⚠️ 文本解析也失败: {e}")
+            # 保持默认值
         
         return status, description, location
 
@@ -205,12 +261,24 @@ class InternalConsistencyDetector:
             # 创建检测提示词
             prompt = self.create_consistency_prompt(question, clean_answer)
             
+            # 计算输入token
+            prompt_tokens = self.token_counter.count_tokens(prompt)
+            
             # 调用API
             result = await self.api_client.call_async(session, prompt, temperature=0.1, max_tokens=4000)
             
             if result['success']:
                 try:
                     content = result['content'].strip()
+                    
+                    # 计算输出token
+                    response_tokens = self.token_counter.count_tokens(content)
+                    
+                    # 更新统计
+                    self.total_input_tokens += prompt_tokens
+                    self.total_output_tokens += response_tokens
+                    self.total_tokens += (prompt_tokens + response_tokens)
+                    self.api_call_count += 1
                     
                     # 解析响应
                     status, description, location = self._parse_consistency_result(content, rank)
@@ -225,7 +293,10 @@ class InternalConsistencyDetector:
                         'status': status,
                         'description': description,
                         'location': location,
-                        'raw_response': content
+                        'raw_response': content,
+                        'prompt_tokens': prompt_tokens,
+                        'response_tokens': response_tokens,
+                        'total_tokens': prompt_tokens + response_tokens
                     }
                     
                 except Exception as e:
@@ -325,6 +396,18 @@ class InternalConsistencyDetector:
                     final_results.append(result)
             
             print(f"✅ 内部一致性检测完成，共{len(final_results)}条结果")
+            
+            # 打印token统计信息
+            if self.api_call_count > 0:
+                print(f"💰 Token统计:")
+                print(f"  API调用次数: {self.api_call_count}")
+                print(f"  输入Token总计: {self.total_input_tokens}")
+                print(f"  输出Token总计: {self.total_output_tokens}")
+                print(f"  Token总计: {self.total_tokens}")
+                print(f"  平均每次调用输入Token: {self.total_input_tokens / self.api_call_count:.1f}")
+                print(f"  平均每次调用输出Token: {self.total_output_tokens / self.api_call_count:.1f}")
+                print(f"  平均每次调用总Token: {self.total_tokens / self.api_call_count:.1f}")
+            
             return final_results
             
         except Exception as e:
@@ -369,6 +452,11 @@ class InternalConsistencyDetector:
         
         problem_count = success_count - no_problem_count
         
+        # 计算token统计信息
+        total_input_tokens = sum(r.get('prompt_tokens', 0) for r in results if r.get('api_success'))
+        total_output_tokens = sum(r.get('response_tokens', 0) for r in results if r.get('api_success'))
+        total_tokens_used = total_input_tokens + total_output_tokens
+        
         return {
             'total_count': total_count,
             'success_count': success_count,
@@ -383,5 +471,14 @@ class InternalConsistencyDetector:
                 '基础错误': status_stats.get('基础错误', 0),
                 '自相矛盾': status_stats.get('自相矛盾', 0),
                 '无问题': status_stats.get('无问题', 0)
+            },
+            'token_usage': {
+                'total_input_tokens': total_input_tokens,
+                'total_output_tokens': total_output_tokens,
+                'total_tokens': total_tokens_used,
+                'api_call_count': success_count,
+                'avg_input_tokens_per_call': total_input_tokens / success_count if success_count > 0 else 0,
+                'avg_output_tokens_per_call': total_output_tokens / success_count if success_count > 0 else 0,
+                'avg_total_tokens_per_call': total_tokens_used / success_count if success_count > 0 else 0
             }
         }

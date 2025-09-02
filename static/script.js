@@ -409,7 +409,13 @@ async function analyzeXlsxFile() {
             headers['X-API-Base-URL'] = apiBaseUrl;
         }
 
-        const response = await fetch('/api/analyze-xlsx', {
+        // 根据分析类型选择API端点
+        let apiEndpoint = '/api/analyze-xlsx';
+        if (analysisType === 'hallucination') {
+            apiEndpoint = '/api/analyze-internal-consistency';
+        }
+
+        const response = await fetch(apiEndpoint, {
             method: 'POST',
             headers: headers,
             body: formData
@@ -421,8 +427,17 @@ async function analyzeXlsxFile() {
         }
 
         const results = await response.json();
+        
+        // 调试信息：检查响应数据结构
+        console.log('API响应数据结构:', results);
+        console.log('total_rows:', results.total_rows);
+        console.log('total_count:', results.total_count);
+        console.log('token_usage:', results.token_usage);
+        
         showResults(results);
-        showProgress(`分析完成！处理了 ${results.total_rows} 行数据，成功 ${results.success_count} 个，失败 ${results.failed_count} 个`);
+        
+        const totalRows = results.total_rows || results.total_count || 0;
+        showProgress(`分析完成！处理了 ${totalRows} 行数据，成功 ${results.success_count} 个，失败 ${results.failed_count} 个`);
 
     } catch (error) {
         console.error('Error during Excel analysis:', error);
@@ -445,10 +460,33 @@ function showResults(results) {
     formattedOutput += `文件名: ${results.filename}\n`;
     formattedOutput += `分析类型: ${results.analysis_type || 'fulltext'}\n`;
     formattedOutput += `分析模式: ${results.analysis_mode || 'all'}\n`;
-    formattedOutput += `总行数: ${results.total_rows}\n`;
-    formattedOutput += `成功分析: ${results.success_count}条\n`;
-    formattedOutput += `分析失败: ${results.failed_count}条\n`;
-    formattedOutput += `成功率: ${((results.success_count / results.total_rows) * 100).toFixed(1)}%\n`;
+    
+    const totalRows = results.total_rows || results.total_count || 0;
+    const successCount = results.success_count || 0;
+    const failedCount = results.failed_count || 0;
+    
+    formattedOutput += `总行数: ${totalRows}\n`;
+    formattedOutput += `成功分析: ${successCount}条\n`;
+    formattedOutput += `分析失败: ${failedCount}条\n`;
+    
+    // 计算成功率，确保类型正确
+    let successRate = '0';
+    if (totalRows > 0 && successCount >= 0) {
+        successRate = ((successCount / totalRows) * 100).toFixed(1);
+    }
+    formattedOutput += `成功率: ${successRate}%\n`;
+    
+    // 显示token使用信息（如果有的话）
+    if (results.token_usage) {
+        formattedOutput += `\n=== Token使用统计 ===\n`;
+        formattedOutput += `API调用次数: ${results.token_usage.api_call_count}\n`;
+        formattedOutput += `输入Token总计: ${results.token_usage.total_input_tokens}\n`;
+        formattedOutput += `输出Token总计: ${results.token_usage.total_output_tokens}\n`;
+        formattedOutput += `Token总计: ${results.token_usage.total_tokens}\n`;
+        if (results.token_usage.avg_total_tokens_per_call > 0) {
+            formattedOutput += `平均每次调用Token: ${results.token_usage.avg_total_tokens_per_call.toFixed(1)}\n`;
+        }
+    }
     
     // 显示文件保存信息
     if (results.output_file_saved) {

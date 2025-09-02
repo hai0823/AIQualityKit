@@ -675,6 +675,7 @@ async def analyze_internal_consistency(
             "provider": api_provider,
             "model": api_model or "default",
             "analysis_time": analysis_time,
+            "total_rows": summary['total_count'],
             "total_count": summary['total_count'],
             "success_count": summary['success_count'],
             "failed_count": summary['failed_count'],
@@ -683,6 +684,7 @@ async def analyze_internal_consistency(
             "problem_rate": round(summary['problem_rate'], 3),
             "status_distribution": summary['status_distribution'],
             "analysis_summary": summary['analysis_summary'],
+            "token_usage": summary.get('token_usage', {}),
             "results": results[:10] if len(results) > 10 else results,  # 只返回前10条详细结果
             "full_results_available": len(results) > 10,
             "output_file_saved": output_path,

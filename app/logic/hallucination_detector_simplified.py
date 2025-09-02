@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-幻觉检测器 - 简化版，适配现有项目架构
-检测AI生成内容中的幻觉问题，进行五分类分析
-"""
 
 import pandas as pd
 import json
