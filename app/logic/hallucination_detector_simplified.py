@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-幻觉检测器 - 简化版，适配现有项目架构
-检测AI生成内容中的幻觉问题，进行五分类分析
-"""
 
 import pandas as pd
 import json
@@ -12,6 +6,7 @@ import aiohttp
 from typing import Dict, Any, List, Optional
 import logging
 from ..utils.api_client import create_api_client
+from ..utils.token_counter import TokenCounter
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +31,13 @@ class HallucinationDetector:
         self.api_key = self.api_client.api_key
         self.base_url = self.api_client.base_url
         self.model = self.api_client.model
+        
+        # 初始化Token计数器和统计
+        self.token_counter = TokenCounter(self.model)
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_tokens = 0
+        self.api_call_count = 0
         
         if not self.api_key:
             raise ValueError(f"API密钥未设置，请提供{provider} API密钥")
@@ -191,6 +193,15 @@ class HallucinationDetector:
             # 调用API
             result = await self.api_client.call_async(session, prompt, temperature=0.1, max_tokens=4000)
             
+            # 统计Token使用（异步版本）
+            if result['success']:
+                prompt_tokens = self.token_counter.count_tokens(prompt)
+                response_tokens = self.token_counter.count_tokens(result['content'])
+                self.total_input_tokens += prompt_tokens
+                self.total_output_tokens += response_tokens
+                self.total_tokens = self.total_input_tokens + self.total_output_tokens
+                self.api_call_count += 1
+            
             if result['success']:
                 try:
                     # 使用原版的文本解析方式，不是JSON解析
@@ -305,6 +316,10 @@ class HallucinationDetector:
                     final_results.append(result)
             
             print(f"✅ 幻觉检测分析完成，共{len(final_results)}条结果")
+            
+            # 打印Token统计
+            self.print_token_statistics()
+            
             return final_results
             
         except Exception as e:
@@ -354,3 +369,15 @@ class HallucinationDetector:
             'hallucination_rate': hallucination_count / success_count if success_count > 0 else 0,
             'category_distribution': category_stats
         }
+
+    def print_token_statistics(self):
+        """输出Token使用统计信息"""
+        print(f"\n=== Token使用统计 ===")
+        print(f"API调用次数: {self.api_call_count}")
+        print(f"输入Token总计: {self.total_input_tokens:,}")
+        print(f"输出Token总计: {self.total_output_tokens:,}")
+        print(f"Token总计: {self.total_tokens:,}")
+        if self.api_call_count > 0:
+            print(f"平均每次调用输入Token: {self.total_input_tokens / self.api_call_count:.1f}")
+            print(f"平均每次调用输出Token: {self.total_output_tokens / self.api_call_count:.1f}")
+            print(f"平均每次调用总Token: {self.total_tokens / self.api_call_count:.1f}")

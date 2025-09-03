@@ -23,3 +23,5 @@ GEMINI.md
 
 # 数据文件夹（包含敏感信息）
 data/
+test_chatanywhere_api.py
+test_chatanywhere_api.py

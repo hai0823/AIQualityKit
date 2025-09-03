@@ -107,16 +107,12 @@ async def analyze_xlsx_file(
     """
     上传xlsx文件进行批量引文分析
     """
-    print("🚨🚨🚨 API函数 analyze_xlsx_file 被调用了！🚨🚨🚨")
-    
     # 获取API配置和分析类型
     api_key = request.headers.get('X-API-Key')
     api_provider = request.headers.get('X-API-Provider', 'alibaba')
     api_model = request.headers.get('X-API-Model', '')
     api_base_url = request.headers.get('X-API-Base-URL', '')
     analysis_type = request.headers.get('X-Analysis-Type', 'fulltext')
-    
-    print(f"🔑 API配置: 密钥={'已设置' if api_key else '未设置'}, 提供商={api_provider}, 模型={api_model or '默认'}, 分析类型={analysis_type}")
     
     if not api_key:
         return JSONResponse(
@@ -675,6 +671,7 @@ async def analyze_internal_consistency(
             "provider": api_provider,
             "model": api_model or "default",
             "analysis_time": analysis_time,
+            "total_rows": summary['total_count'],
             "total_count": summary['total_count'],
             "success_count": summary['success_count'],
             "failed_count": summary['failed_count'],
@@ -683,6 +680,7 @@ async def analyze_internal_consistency(
             "problem_rate": round(summary['problem_rate'], 3),
             "status_distribution": summary['status_distribution'],
             "analysis_summary": summary['analysis_summary'],
+            "token_usage": summary.get('token_usage', {}),
             "results": results[:10] if len(results) > 10 else results,  # 只返回前10条详细结果
             "full_results_available": len(results) > 10,
             "output_file_saved": output_path,

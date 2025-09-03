@@ -1,7 +1,7 @@
 // 全局变量
 let selectedFile = null;
 let apiKey = '';
-let apiProvider = 'alibaba';
+let apiProvider = 'demo';
 let apiModel = '';
 let apiBaseUrl = '';
 
@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
         apiProvider = this.value;
         updateApiKeyLabel();
         updateDefaultModel();
+        updateDemoConfiguration();
     });
 
     // 模型名称输入监听
@@ -98,6 +99,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 初始化界面状态
     updateDefaultModel();
+    updateDemoConfiguration();
     toggleAnalysisOptions('fulltext');
     showFulltextInputs('all');
 });
@@ -409,7 +411,13 @@ async function analyzeXlsxFile() {
             headers['X-API-Base-URL'] = apiBaseUrl;
         }
 
-        const response = await fetch('/api/analyze-xlsx', {
+        // 根据分析类型选择API端点
+        let apiEndpoint = '/api/analyze-xlsx';
+        if (analysisType === 'hallucination') {
+            apiEndpoint = '/api/analyze-internal-consistency';
+        }
+
+        const response = await fetch(apiEndpoint, {
             method: 'POST',
             headers: headers,
             body: formData
@@ -421,8 +429,17 @@ async function analyzeXlsxFile() {
         }
 
         const results = await response.json();
+        
+        // 调试信息：检查响应数据结构
+        console.log('API响应数据结构:', results);
+        console.log('total_rows:', results.total_rows);
+        console.log('total_count:', results.total_count);
+        console.log('token_usage:', results.token_usage);
+        
         showResults(results);
-        showProgress(`分析完成！处理了 ${results.total_rows} 行数据，成功 ${results.success_count} 个，失败 ${results.failed_count} 个`);
+        
+        const totalRows = results.total_rows || results.total_count || 0;
+        showProgress(`分析完成！处理了 ${totalRows} 行数据，成功 ${results.success_count} 个，失败 ${results.failed_count} 个`);
 
     } catch (error) {
         console.error('Error during Excel analysis:', error);
@@ -445,10 +462,33 @@ function showResults(results) {
     formattedOutput += `文件名: ${results.filename}\n`;
     formattedOutput += `分析类型: ${results.analysis_type || 'fulltext'}\n`;
     formattedOutput += `分析模式: ${results.analysis_mode || 'all'}\n`;
-    formattedOutput += `总行数: ${results.total_rows}\n`;
-    formattedOutput += `成功分析: ${results.success_count}条\n`;
-    formattedOutput += `分析失败: ${results.failed_count}条\n`;
-    formattedOutput += `成功率: ${((results.success_count / results.total_rows) * 100).toFixed(1)}%\n`;
+    
+    const totalRows = results.total_rows || results.total_count || 0;
+    const successCount = results.success_count || 0;
+    const failedCount = results.failed_count || 0;
+    
+    formattedOutput += `总行数: ${totalRows}\n`;
+    formattedOutput += `成功分析: ${successCount}条\n`;
+    formattedOutput += `分析失败: ${failedCount}条\n`;
+    
+    // 计算成功率，确保类型正确
+    let successRate = '0';
+    if (totalRows > 0 && successCount >= 0) {
+        successRate = ((successCount / totalRows) * 100).toFixed(1);
+    }
+    formattedOutput += `成功率: ${successRate}%\n`;
+    
+    // 显示token使用信息（如果有的话）
+    if (results.token_usage) {
+        formattedOutput += `\n=== Token使用统计 ===\n`;
+        formattedOutput += `API调用次数: ${results.token_usage.api_call_count}\n`;
+        formattedOutput += `输入Token总计: ${results.token_usage.total_input_tokens}\n`;
+        formattedOutput += `输出Token总计: ${results.token_usage.total_output_tokens}\n`;
+        formattedOutput += `Token总计: ${results.token_usage.total_tokens}\n`;
+        if (results.token_usage.avg_total_tokens_per_call > 0) {
+            formattedOutput += `平均每次调用Token: ${results.token_usage.avg_total_tokens_per_call.toFixed(1)}\n`;
+        }
+    }
     
     // 显示文件保存信息
     if (results.output_file_saved) {
@@ -602,12 +642,14 @@ function showResults(results) {
 // 更新API Key标签
 function updateApiKeyLabel() {
     const labels = {
+        'demo': 'API Key (演示专用):',
         'alibaba': '百炼API Key:',
         'openai': 'OpenAI API Key:',
         'deepseek': 'DeepSeek API Key:'
     };
     
     const placeholders = {
+        'demo': '演示专用 - 已自动配置',
         'alibaba': '请输入百炼API Key...',
         'openai': '请输入OpenAI API Key...',
         'deepseek': '请输入DeepSeek API Key...'
@@ -621,6 +663,7 @@ function updateApiKeyLabel() {
 function updateDefaultModel() {
     // 定义各提供商的默认模型
     const defaultModels = {
+        'demo': 'gemini-2.5-pro',
         'alibaba': 'qwen-plus',
         'openai': 'gpt-4o',
         'deepseek': 'deepseek-chat'
@@ -628,6 +671,7 @@ function updateDefaultModel() {
     
     // 定义各提供商的模型描述
     const modelDescriptions = {
+        'demo': '演示专用模型 - 已自动配置',
         'alibaba': '推荐使用 qwen-plus, qwen-turbo, qwen-max, qwen-long 等',
         'openai': '推荐使用 gpt-4o, gpt-4o-mini, gpt-3.5-turbo 等',
         'deepseek': '推荐使用 deepseek-chat'
@@ -638,14 +682,49 @@ function updateDefaultModel() {
     const description = modelDescriptions[apiProvider] || '请输入模型名称';
     
     // 设置默认模型值
-    if (!apiModel) {
-        apiModel = defaultModel;
-        modelNameInput.value = defaultModel;
-    }
+    apiModel = defaultModel;
+    modelNameInput.value = defaultModel;
     
     // 更新占位符和帮助文本
     modelNameInput.placeholder = defaultModel || '请输入模型名称...';
     modelHelp.textContent = description;
+}
+
+// 更新演示配置
+function updateDemoConfiguration() {
+    if (apiProvider === 'demo') {
+        // 为演示专用配置固定的API Key和URL
+        apiKey = 'sk-';
+        apiBaseUrl = 'api.chatanywhere.tech/v1/chat/completions';
+        
+        // 设置UI状态
+        apiKeyInput.value = apiKey;
+        apiKeyInput.disabled = true;
+        apiBaseUrlInput.value = apiBaseUrl;
+        apiBaseUrlInput.disabled = true;
+        modelNameInput.disabled = true;
+        
+        // 更新分析按钮状态
+        updateAnalyzeButton();
+    } else {
+        // 恢复其他提供商的正常状态
+        apiKeyInput.disabled = false;
+        apiBaseUrlInput.disabled = false;
+        modelNameInput.disabled = false;
+        
+        // 清空演示专用的配置
+        if (apiKey === 'sk-') {
+            apiKey = '';
+            apiKeyInput.value = '';
+        }
+        if (apiBaseUrl === 'api.chatanywhere.tech/v1/chat/completions') {
+            apiBaseUrl = '';
+            apiBaseUrlInput.value = '';
+        }
+        
+        // 更新分析按钮状态
+        updateAnalyzeButton();
+    }
 }
 
 // 切换高级选项显示

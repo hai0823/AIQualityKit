@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 通用API客户端模块
-支持多个API提供商：阿里云百炼、OpenAI、DeepSeek
+支持多个API提供商：阿里云百炼、OpenAI、DeepSeek、演示专用
 """
 
 import os
@@ -23,7 +23,7 @@ class APIClient:
         初始化API客户端
         
         Args:
-            provider: API提供商 ('alibaba', 'openai', 'deepseek')
+            provider: API提供商 ('alibaba', 'openai', 'deepseek', 'demo')
             api_key: API密钥
             base_url: API基础URL（可选）
             model: 模型名称（可选）
@@ -34,23 +34,29 @@ class APIClient:
     def _configure_provider(self, api_key: str, base_url: str, model: str):
         """配置不同的API提供商"""
         if self.provider == "alibaba":
-            self.api_key = api_key or os.getenv('AL_KEY')
+            self.api_key = api_key if api_key and api_key.strip() else None
             self.base_url = base_url or "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
             self.model = model or "qwen-plus"
             self._request_format = "alibaba"
             
         elif self.provider == "openai":
-            self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+            self.api_key = api_key if api_key and api_key.strip() else None
             self.base_url = base_url or "https://api.openai.com/v1/chat/completions"
             self.model = model or "gpt-4o"
             self._request_format = "openai"
             
         elif self.provider == "deepseek":
-            self.api_key = api_key or os.getenv('DEEPSEEK_API_KEY')
+            self.api_key = api_key if api_key and api_key.strip() else None
             self.base_url = base_url or "https://api.deepseek.com/v1/chat/completions"
             self.model = model or "deepseek-chat"
             self._request_format = "openai"  # DeepSeek使用OpenAI兼容格式
             
+        elif self.provider == "demo":
+            # 演示专用配置，使用OpenAI兼容格式
+            self.api_key = api_key if api_key and api_key.strip() else None
+            self.base_url = base_url or "https://api.nuwaapi.com/v1/chat/completions"
+            self.model = model or "gemini-2.5-pro"
+            self._request_format = "openai"  # 演示API使用OpenAI兼容格式
             
         else:
             raise ValueError(f"不支持的API提供商: {self.provider}")
@@ -70,7 +76,8 @@ class APIClient:
                 },
                 'parameters': {
                     'temperature': temperature,
-                    'max_tokens': max_tokens
+                    'max_tokens': max_tokens,
+                    'enable_thinking': False
                 }
             }
         else:  # OpenAI格式
@@ -96,7 +103,13 @@ class APIClient:
     def _extract_content(self, response_data: dict) -> str:
         """从响应中提取内容"""
         if self._request_format == "alibaba":
-            if response_data.get('output') and response_data['output'].get('text'):
+            # 优先尝试新格式 (output.choices)
+            if (response_data.get('output') and 
+                response_data['output'].get('choices') and 
+                len(response_data['output']['choices']) > 0):
+                return response_data['output']['choices'][0]['message']['content']
+            # 回退到旧格式 (output.text)
+            elif response_data.get('output') and response_data['output'].get('text'):
                 return response_data['output']['text']
             else:
                 raise ValueError(f"阿里云API响应格式异常: {response_data}")
@@ -127,15 +140,8 @@ class APIClient:
         headers = self._build_headers()
         data = self._build_request_data(prompt, temperature, max_tokens)
         
-        # 调试日志：打印请求数据
-        print(f"API请求数据调试:")
-        print(f"  Provider: {self.provider}")
-        print(f"  Base URL: {self.base_url}")
-        print(f"  Model: {self.model}")
-        print(f"  Prompt长度: {len(prompt)}字符")
-        print(f"  Prompt前100字符: {prompt[:100]}")
-        print(f"  Request Data: {json.dumps(data, ensure_ascii=False, indent=2)}")
-        print(f"  Headers: {headers}")
+        # 简化日志输出
+        print(f"API调用: {self.provider} {self.model} (prompt: {len(prompt)}字符)")
 
         prompt_tokens = self.count_chars(prompt)
 
@@ -144,13 +150,7 @@ class APIClient:
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
-                    print(f"    第{attempt + 1}次重试...")
-
-                # 验证关键数据
-                print(f"  准备发送请求:")
-                print(f"    prompt是否为空: {not prompt or prompt.strip() == ''}")
-                print(f"    data['messages'][0]['content']长度: {len(data['messages'][0]['content'])}")
-                print(f"    实际JSON: {json.dumps(data, ensure_ascii=False)[:200]}...")
+                    print(f"第{attempt + 1}次重试...")
                 
                 response = requests.post(self.base_url, headers=headers, json=data, timeout=180)
 
@@ -176,12 +176,8 @@ class APIClient:
                         continue
 
                 elif response.status_code >= 500:
-                    try:
-                        error_response = response.text
-                        print(f"500错误详情: {error_response}")
-                        last_error = f'服务器错误: {response.status_code} - {error_response[:200]}'
-                    except:
-                        last_error = f'服务器错误: {response.status_code}'
+                    error_response = response.text
+                    last_error = f'服务器错误: {response.status_code}'
                     if attempt < max_retries - 1:
                         time.sleep(10)
                         continue
@@ -194,7 +190,9 @@ class APIClient:
                     }
 
                 else:
-                    last_error = f'客户端错误: {response.status_code}'
+                    error_response = response.text
+                    print(f"400错误详情: {error_response}")
+                    last_error = f'客户端错误: {response.status_code} - {error_response[:200]}'
                     break
 
             except requests.exceptions.Timeout:
@@ -235,15 +233,11 @@ class APIClient:
         headers = self._build_headers()
         data = self._build_request_data(prompt, temperature, max_tokens)
         
-        # 调试日志：打印请求数据
-        print(f"[异步API调用] API请求数据调试:")
-        print(f"  Provider: {self.provider}")
-        print(f"  Base URL: {self.base_url}")
-        print(f"  Model: {self.model}")
-        print(f"  Prompt长度: {len(prompt)}字符")
-        print(f"  Prompt前100字符: {prompt[:100]}")
-        print(f"  Request Data: {json.dumps(data, ensure_ascii=False, indent=2)}")
-        print(f"  Headers: {headers}")
+        # 详细调试日志
+        print(f"异步API调用: {self.provider} {self.model} (prompt: {len(prompt)}字符)")
+        print(f"请求URL: {self.base_url}")
+        print(f"请求数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+        print(f"请求头: {headers}")
 
         # 重试循环
         last_error = None
@@ -272,9 +266,7 @@ class APIClient:
                             continue
 
                     elif response.status >= 500:
-                        response_text = await response.text()
-                        print(f"500错误详情: {response_text}")
-                        last_error = f'服务器错误: {response.status} - {response_text[:200]}'
+                        last_error = f'服务器错误: {response.status}'
                         if attempt < max_retries - 1:
                             await asyncio.sleep(10)
                             continue
@@ -289,7 +281,8 @@ class APIClient:
 
                     else:
                         response_text = await response.text()
-                        last_error = f'客户端错误: {response.status}'
+                        print(f"400错误详情: {response_text}")
+                        last_error = f'客户端错误: {response.status} - {response_text[:200]}'
                         break
 
             except asyncio.TimeoutError:
@@ -324,11 +317,13 @@ def create_api_client(provider: str, api_key: str = None, base_url: str = None, 
 DEFAULT_MODELS = {
     'alibaba': 'qwen-plus',
     'openai': 'gpt-4o',
-    'deepseek': 'deepseek-chat'
+    'deepseek': 'deepseek-chat',
+    'demo': 'gemini-2.5-pro'
 }
 
 DEFAULT_ENV_KEYS = {
     'alibaba': 'AL_KEY',
     'openai': 'OPENAI_API_KEY',
-    'deepseek': 'DEEPSEEK_API_KEY'
+    'deepseek': 'DEEPSEEK_API_KEY',
+    'demo': 'DEMO_API_KEY'  # 演示专用，但实际不会从环境变量读取
 }
