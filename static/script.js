@@ -694,7 +694,7 @@ function updateDefaultModel() {
 function updateDemoConfiguration() {
     if (apiProvider === 'demo') {
         // 为演示专用配置固定的API Key和URL
-        apiKey = 'sk-DE8xhX8sshtGmJennCNAAfvGCKB15QSLjoFilbJwI7PwCRCc';
+        apiKey = 'sk-';
         apiBaseUrl = 'api.chatanywhere.tech/v1/chat/completions';
         
         // 设置UI状态
@@ -713,7 +713,7 @@ function updateDemoConfiguration() {
         modelNameInput.disabled = false;
         
         // 清空演示专用的配置
-        if (apiKey === 'sk-DE8xhX8sshtGmJennCNAAfvGCKB15QSLjoFilbJwI7PwCRCc') {
+        if (apiKey === 'sk-') {
             apiKey = '';
             apiKeyInput.value = '';
         }
