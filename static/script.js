@@ -694,8 +694,8 @@ function updateDefaultModel() {
 function updateDemoConfiguration() {
     if (apiProvider === 'demo') {
         // 为演示专用配置固定的API Key和URL
-        apiKey = 'sk-uQdj1sORHbo68JQmbKGy1srAqJP8xnIs9jHe6uO3iIrKaSO3';
-        apiBaseUrl = 'https://api.nuwaapi.com/v1/chat/completions';
+        apiKey = 'sk-DE8xhX8sshtGmJennCNAAfvGCKB15QSLjoFilbJwI7PwCRCc';
+        apiBaseUrl = 'api.chatanywhere.tech/v1/chat/completions';
         
         // 设置UI状态
         apiKeyInput.value = apiKey;
@@ -713,11 +713,11 @@ function updateDemoConfiguration() {
         modelNameInput.disabled = false;
         
         // 清空演示专用的配置
-        if (apiKey === 'sk-uQdj1sORHbo68JQmbKGy1srAqJP8xnIs9jHe6uO3iIrKaSO3') {
+        if (apiKey === 'sk-DE8xhX8sshtGmJennCNAAfvGCKB15QSLjoFilbJwI7PwCRCc') {
             apiKey = '';
             apiKeyInput.value = '';
         }
-        if (apiBaseUrl === 'https://api.nuwaapi.com/v1/chat/completions') {
+        if (apiBaseUrl === 'api.chatanywhere.tech/v1/chat/completions') {
             apiBaseUrl = '';
             apiBaseUrlInput.value = '';
         }
